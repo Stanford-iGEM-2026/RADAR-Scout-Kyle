@@ -15,42 +15,60 @@ Mapped to the project spec. `[x]` done, `[~]` in progress, `[ ]` todo.
 - [x] Unit tests (ideal > housekeeping > low-abundance) — all green
 - [x] Modal Census pipeline: cheap disease scan + `build_and_score` (`modal_app/census_pull.py`)
 
-### Data (next)
-- [ ] **Run the Census scan** — confirm whether keloid is in CELLxGENE Census
-      (else fall back to GEO loader or a related fibrosis for the first vertical)
-- [ ] First vertical end-to-end: keloid fibroblast vs normal/hypertrophic scar + healthy skin
-- [ ] Name harmonization: disease→MONDO/DOID, cell type→Cell Ontology (CL)
+### Data (done)
+- [x] Census scan — keloid IS in Census (1,270 cells, 4 donors, 1 dataset)
+- [x] First vertical end-to-end: **keloid** skin fibroblast (P, 4 donors) vs **normal**
+      (H, 214 donors) + **localized scleroderma & injury** (R) — 3,487 candidate genes
+- [x] Name harmonization: disease→MONDO/DOID, cell type→CL (`radar_scout/ontology.py`)
+- [x] Technical-gene filter (`radar_scout/genesets.py`) — sex/ribosomal/mito/ncRNA/IEG
 - [ ] GEO / EBI SCEA loaders for datasets not in Census (single-cell only)
-- [ ] QC / doublet removal / batch correction (scanpy + scVI on Modal) — donor metadata preserved
+- [ ] QC / doublet removal / **batch correction** (scanpy + scVI on Modal) — see finding below
 
-### Stats
-- [ ] Mixed-effects DE with `(1|donor)` (pseudobulk) as orthogonal DE readout
-- [ ] Forest plots of donor-level effect sizes across cohorts
+### Stats (done)
+- [x] Donor-aware DE: pseudobulk Welch/MWU + BH-FDR, cell-level MixedLM `(1|donor)`,
+      forest-plot data (`radar_scout/de.py`)
+- [ ] Wire forest plots into the figure/dashboard layer
 
 ## Week 2 — validation + dashboard
 
 ### Validation (paper-facing, all on real data)
-- [ ] V1 recover known keloid markers; housekeeping scores low; ultra-low-specific scores low
-- [ ] V2 regime/knee plot (abundance vs specificity, K_lo overlay)
+- [~] V1 recover keloid markers — **partial**: after filtering, real fibrosis genes
+      surface (HAS2, COL5A2/6A3, ZEB2, ITGB1) mixed with batch-correlated ubiquitous
+      genes; see finding below
+- [x] V2 regime/knee plot (abundance vs specificity) — `scripts/figures.py`, `figures/`
 - [ ] V3 donor-holdout ranking stability
 - [ ] V4 ablations: RACS vs abundance-only / specificity-only / DE-only
-- [ ] V5 cross-disease specificity
+- [ ] V5 cross-disease specificity (R is wired; formalize the comparison)
 
-### Dashboard (React / JS / HTML / CSS — palette #8e1918 / #1c7170)
-- [ ] Disease + cell-type input → ranked RACS table
-- [ ] Filters (abundance, threshold, detection, specificity, off-target)
-- [ ] Multi-transcript compare
-- [ ] Viz: UMAP, volcano, RACS bar breakdown, abundance-vs-specificity, dot/heatmap, forest, PAGA
-- [ ] Export publication-quality figures + tables
-- [ ] Gene → Plasmid + Primer design hand-off
+### Dashboard (done — React + recharts, palette #8e1918 / #1c7170)
+- [x] Disease + cell-type input → ranked RACS table (loads real results)
+- [x] Filters (RACS, Feas, Sep, Repro, OffMax)
+- [x] Multi-transcript compare (up to 4)
+- [x] Viz: RACS bar breakdown, activation/therapeutic-window, abundance-vs-specificity knee, off-target
+- [x] Export CSV + per-chart SVG/PNG
+- [x] Gene → Plasmid + Primer hand-off (`radar_scout/design.py`)
+- [ ] Additional viz: UMAP, volcano, dot/heatmap, forest, PAGA (needs cell-level payloads to dashboard)
+
+## KEY FINDING — batch confounding (write this up for the judges)
+The unfiltered ranking was dominated by **technical confounders** (XIST → sex;
+RPL*/RPS* → seq depth; JUN/NR4A1 → dissociation stress; NEAT1/MALAT1 → nuclear
+lncRNA) because **keloid comes from a single cohort**, so disease is perfectly
+confounded with batch — any technical signature gives donor-level AUC ≈ 1.0. The
+gene filter removes these (and they are poor RADAR targets anyway). After filtering,
+credible keloid biology appears (**HAS2, COL5A2, COL6A3, ZEB2, ITGB1**) alongside
+residual ubiquitous/RNA-binding genes (PLCG2, FUS, splicing factors). Mitigations:
+(a) require low off-target activation across the **related-disease** cohorts (already
+in OffMax); (b) add a **pan-tissue** off-target reference to penalize broadly-expressed
+genes; (c) obtain a second keloid cohort. This is an honest, defensible limitation of
+single-cohort target discovery — and a strength to surface, not hide.
 
 ## Flagged risks / must-verify before freeze
 - [ ] **Calibrate the Hill parameters** (`K, n, L, K_lo, K_hi`) from the published
       RADAR/RADARS dose-response. Current values in `hill.py` are documented
-      placeholders; every activation-dependent number depends on them.
-- [ ] **Verify references** in `docs/RACS_framework.md` (RADAR kinetics paper,
-      significance-score paper) — exact venue/authors before wiki/paper.
-- [ ] **Keloid coverage in CELLxGENE Census** — confirm empirically via the scan.
+      placeholders; all activation-dependent numbers (Feas/OffMax/RACS magnitudes,
+      not the specificity ranking) are provisional until then. **Top blocker.**
+- [ ] **Pan-tissue off-target** expansion to suppress ubiquitous-gene false positives.
+- [ ] **Verify references** in `docs/RACS_framework.md` (RADAR kinetics, significance score).
 - [ ] Replace `significance_score` stand-in with the exact Lu et al. (2014) formula.
 
 ## Cost discipline (Modal)

@@ -30,7 +30,7 @@ $$
 
 | Term | Meaning | Spec requirement |
 |---|---|---|
-| **Sep** | donor-mean AUC, pathogenic vs off-target | cell-type + disease specificity, detection |
+| **Sep** | donor-level AUC, pathogenic vs off-target donors | cell-type + disease specificity, detection |
 | **Feas** | on-target activation at the reachable threshold | abundance ≥ activation threshold |
 | **Repro** | donor/cohort consistency of the window | reproducibility (no pseudoreplication) |
 | **OffMax** | worst-case off-target activation | healthy penalty + off-target + cross-disease |
@@ -46,16 +46,20 @@ pseudoreplication bias.
 ```
 radar_scout/           # core Python package (array-based, unit-tested)
   hill.py              # RADAR/ADAR activation model + threshold band
-  scoring.py           # RACS + donor-aware component scores
+  scoring.py           # RACS + donor-aware component scores (donor-level AUC)
   specificity.py       # tau / significance-score indices (annotation, ablations)
-  pseudobulk.py        # donor-aware aggregation for mixed-effects DE
-docs/
-  RACS_framework.md    # the mathematical framework (primary deliverable)
-modal_app/
-  census_pull.py       # Modal: CELLxGENE Census pull + scoring (heavy compute)
-tests/                 # correctness tests (toy arrays only)
-dashboard/             # React/JS interactive platform (WIP)
-ROADMAP.md             # 2-week plan mapped to the spec
+  pseudobulk.py        # donor-aware aggregation
+  de.py                # donor-aware differential expression (pseudobulk + MixedLM)
+  ontology.py          # free-text -> MONDO/DOID/CL harmonization (EBI OLS)
+  genesets.py          # technical-gene filter (sex/ribosomal/mito/ncRNA/IEG)
+  design.py            # Gene -> Plasmid + Primer hand-off (Ensembl + primer design)
+docs/RACS_framework.md # the mathematical framework (primary deliverable)
+modal_app/census_pull.py # Modal: Census scan/probe + build_and_score (heavy compute)
+scripts/figures.py     # publication-quality figures from a RACS table
+dashboard/             # React + recharts interactive platform (built; brand palette)
+figures/               # generated example figures (keloid vertical)
+tests/                 # correctness tests (39 assertions across scoring/de/ontology)
+ROADMAP.md             # 2-week plan + the batch-confounding finding
 ```
 
 ## Quickstart
@@ -76,10 +80,32 @@ Portal, GEO, EBI Single Cell Expression Atlas, Tabula Sapiens (healthy reference
 Annotation only (never quantification): Open Targets, Human Protein Atlas,
 Reactome, Cell Ontology (CL) + MONDO/DOID for name harmonization.
 
+## First results — keloid (provisional)
+
+First end-to-end vertical on **real** CELLxGENE Census data: keloid skin
+fibroblasts (P, 4 donors) vs normal skin fibroblasts (H, 214 donors) and related
+fibrotic/wound conditions (R: localized scleroderma, injury), 3,487 candidate genes.
+
+- After filtering technical genes, credible keloid biology surfaces —
+  **HAS2, COL5A2, COL6A3, ZEB2, ITGB1** — alongside residual broadly-expressed
+  genes, reflecting a real limitation: **keloid is a single cohort, so disease is
+  confounded with batch.** See the "KEY FINDING" in [`ROADMAP.md`](ROADMAP.md).
+- Scores are **provisional** pending Hill-parameter calibration from the RADAR
+  dose-response; the *specificity ranking* is calibration-independent, the
+  *activation magnitudes* are not.
+- The dashboard loads these results out of the box; `scripts/figures.py` regenerates
+  the figures in `figures/`.
+
+Run the dashboard:
+```bash
+cd dashboard && npm install && npm run dev
+```
+
 ## Design system
 
 Brand palette: `#8e1918` (crimson), `#1c7170` (teal), white, black.
 
 ---
-*Status: v0.1 — framework + scorer + Modal pipeline landed and tested. See
-[`ROADMAP.md`](ROADMAP.md).*
+*Status: v0.1 — framework, donor-aware scorer, DE, ontology, technical filter, Modal
+Census pipeline, design hand-off, figures, and a working React dashboard all landed
+and tested on the keloid vertical. See [`ROADMAP.md`](ROADMAP.md).*

@@ -1,19 +1,24 @@
 {
   "disease": "keloid",
-  "tissue": "skin",
+  "tissue": "skin of body",
   "pathogenic_cell_types": [
-    "skin fibroblast",
-    "myofibroblast"
+    "skin fibroblast"
+  ],
+  "related_diseases": [
+    "localized scleroderma",
+    "injury"
   ],
   "cell_counts": {
-    "P": 18432,
-    "H": 24107,
-    "R": 9563
+    "P": 1270,
+    "H": 40000,
+    "R": 7057
   },
   "n_donors": {
-    "P": 9,
-    "H": 9,
-    "R": 6
+    "P": 4,
+    "H": 214,
+    "R": 9
   },
-  "census_version": "2025-11-08"
+  "n_candidate_genes": 3487,
+  "census_version": "2025-11-08",
+  "calibrated": false
 }
