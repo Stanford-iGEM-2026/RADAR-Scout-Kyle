@@ -1,0 +1,39 @@
+"""RADAR-Scout: single-cell RNA target prioritization for ADAR-based RNA sensors.
+
+The public surface is intentionally small and array-based so that the scoring
+logic is testable without heavy single-cell dependencies. The Modal pipeline
+(``modal_app/``) extracts per-cell arrays from AnnData and calls into here.
+
+See ``docs/RACS_framework.md`` for the theory these functions implement.
+"""
+
+from .hill import hill_activation, HillParams, DEFAULT_HILL, reachable_band
+from .scoring import (
+    separability,
+    feasibility,
+    off_target_max,
+    reproducibility,
+    racs,
+    score_gene,
+    GeneScore,
+)
+from .specificity import significance_score, tau_specificity
+
+__version__ = "0.1.0"
+
+__all__ = [
+    "hill_activation",
+    "HillParams",
+    "DEFAULT_HILL",
+    "reachable_band",
+    "separability",
+    "feasibility",
+    "off_target_max",
+    "reproducibility",
+    "racs",
+    "score_gene",
+    "GeneScore",
+    "significance_score",
+    "tau_specificity",
+    "__version__",
+]

@@ -1,0 +1,27 @@
+# envs
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+
+# data / large artifacts (single-cell matrices never go in git)
+data/
+outputs/
+*.h5ad
+*.h5
+*.parquet
+*.loom
+*.mtx
+
+# node / dashboard
+node_modules/
+dashboard/dist/
+dashboard/build/
+.next/
+
+# os / editor
+.DS_Store
+.vscode/
+.idea/

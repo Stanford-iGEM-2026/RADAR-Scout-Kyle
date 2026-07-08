@@ -1,0 +1,13 @@
+# Local (light) dependencies — scoring, stats, orchestration, dashboard tooling.
+# Heavy single-cell libs (cellxgene-census, scanpy, scvi) run on Modal only;
+# their versions are pinned in modal_app/census_pull.py's image.
+numpy
+scipy
+pandas
+scikit-learn
+statsmodels
+matplotlib
+anndata
+pyarrow
+pytest
+modal
