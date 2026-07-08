@@ -1,0 +1,19 @@
+{
+  "disease": "keloid",
+  "tissue": "skin",
+  "pathogenic_cell_types": [
+    "skin fibroblast",
+    "myofibroblast"
+  ],
+  "cell_counts": {
+    "P": 18432,
+    "H": 24107,
+    "R": 9563
+  },
+  "n_donors": {
+    "P": 9,
+    "H": 9,
+    "R": 6
+  },
+  "census_version": "2025-11-08"
+}

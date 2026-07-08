@@ -249,6 +249,7 @@ def build_and_score(
     tissue: str = "skin of body",
     min_detect_frac: float = 0.10,
     max_cells_per_pop: int = 40000,
+    exclude_technical: bool = True,
     out_name: str = "keloid_fibroblast",
 ) -> dict:
     """Assemble P/H/B/R populations, normalize, and run RACS. Writes to the Volume.
@@ -262,6 +263,7 @@ def build_and_score(
     import anndata as ad
 
     from radar_scout.scoring import score_matrix
+    from radar_scout.genesets import filter_technical, reasons
 
     pct = [c.strip() for c in pathogenic_cell_types.split(",") if c.strip()]
     related = [r.strip() for r in related_diseases.split(",") if r.strip()]
@@ -304,6 +306,15 @@ def build_and_score(
     X = np.asarray(X.todense()) if hasattr(X, "todense") else np.asarray(X)  # only candidate genes
     genes = (sub.var["feature_name"] if "feature_name" in sub.var else sub.var_names).to_numpy().astype(str)
 
+    n_before = len(genes)
+    if exclude_technical:
+        mask = filter_technical(genes)
+        removed = reasons(genes[~mask])
+        print(f"[filter] dropped {int((~mask).sum())}/{n_before} technical genes "
+              f"(sex/ribosomal/mito/ncRNA/IEG); e.g. {list(removed)[:8]}")
+        X = X[:, mask]
+        genes = genes[mask]
+
     df = score_matrix(X, genes, donor, pop, pos_label="P")
 
     ucounts = sorted(set(pop_detail))
@@ -314,7 +325,8 @@ def build_and_score(
     df.to_parquet(out_path)
     meta = {"disease": disease, "tissue": tissue, "pathogenic_cell_types": pct,
             "related_diseases": related, "cell_counts": counts, "n_donors": ndon,
-            "n_candidate_genes": int(len(keep)), "census_version": CENSUS_VERSION,
+            "n_candidate_genes": int(len(genes)), "n_candidate_prefilter": int(n_before),
+            "exclude_technical": bool(exclude_technical), "census_version": CENSUS_VERSION,
             "out": out_path, "top25": df.head(25).to_dict(orient="records")}
     with open(f"{DATA}/{out_name}_meta.json", "w") as fh:
         json.dump(meta, fh, indent=2, default=float)

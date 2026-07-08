@@ -19,6 +19,9 @@ from .scoring import (
 )
 from .specificity import significance_score, tau_specificity
 from .ontology import resolve, resolve_disease, resolve_cell_type, OntologyHit
+from .genesets import is_technical, filter_technical
+from .de import pseudobulk_de, mixedlm_de, forest_data
+from .design import design_target, RadarDesign
 
 __version__ = "0.1.0"
 
@@ -40,5 +43,12 @@ __all__ = [
     "resolve_disease",
     "resolve_cell_type",
     "OntologyHit",
+    "is_technical",
+    "filter_technical",
+    "pseudobulk_de",
+    "mixedlm_de",
+    "forest_data",
+    "design_target",
+    "RadarDesign",
     "__version__",
 ]
