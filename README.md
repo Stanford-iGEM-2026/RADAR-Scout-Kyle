@@ -2,26 +2,22 @@
 
 **A single-cell RNA target-prioritization platform for RADAR-based, disease-agnostic therapeutics.**
 
-Stanford iGEM 2026. RADAR-Scout ranks RNA transcripts by how reliably they will
+RADAR-Scout ranks RNA transcripts by how reliably they will
 activate a **RADAR** RNA sensor (ADAR-based) inside pathogenic cells while staying
 silent in healthy and off-target cells. Inputs: a **disease** and a **cell type**.
-Output: a ranked list of candidate targets with a **Gene of interest → Plasmid + Primer**
-design hand-off.
+Output: a ranked list of candidate targets with a **Gene of interest → Plasmid + Primer**.
 
-Everything is built on **single-cell / single-nucleus RNA-seq only** — bulk RNA-seq
-is never used for ranking (it averages over cell composition and cannot tell us
-whether a transcript clears the sensor's activation threshold *inside a cell*).
+Everything is built on **single-cell / single-nucleus RNA-seq only**.
 
 ---
 
 ## The core idea: RACS
 
 The scientific heart of the project is the **RADAR Activation Compatibility Score
-(RACS)** — a signal-detection framework that formalizes the trade-off between
+(RACS)**, a signal-detection framework that formalizes the trade-off between
 transcript **abundance** and **specificity**. RADAR needs a target to exceed an
 activation threshold, but the most abundant transcripts are rarely specific and
-the most specific are often too scarce to fire the sensor. RACS derives the
-optimal balance from the ADAR activation kinetics rather than assuming it.
+the most specific are often too scarce to fire the sensor. 
 
 > **Full derivation:** [`docs/RACS_framework.md`](docs/RACS_framework.md).
 > Result in one line: *RADAR target selection = maximizing the donor-aware AUC
