@@ -40,20 +40,25 @@ def _neg_labels(neg_labels, pop, pos_label):
 def _youden_threshold(pos_pool: np.ndarray, neg_pool: np.ndarray, band) -> tuple[float, float]:
     """Hard-threshold Youden-optimal operating point, clamped to the reachable band.
 
-    Pooling across donors is acceptable *here* because this only selects a single
-    operating threshold; all scoring evaluations remain donor-aware.
+    O(n log n) via a single sort (the naive per-candidate broadcast is O(n^2) and
+    blows up at ~1e4+ cells). Pooling across donors is acceptable *here* — it only
+    selects one operating threshold; all scoring evaluations remain donor-aware.
     Returns (k_op, youden_J).
     """
     lo, hi = band
-    if pos_pool.size == 0 or neg_pool.size == 0:
+    n_pos, n_neg = pos_pool.size, neg_pool.size
+    if n_pos == 0 or n_neg == 0:
         return float(lo), np.nan
-    cand = np.unique(np.concatenate([pos_pool, neg_pool]))
-    # evaluate J at each candidate threshold t: TPR(>t) - FPR(>t)
-    tpr = (pos_pool[:, None] > cand[None, :]).mean(axis=0)
-    fpr = (neg_pool[:, None] > cand[None, :]).mean(axis=0)
-    j = tpr - fpr
-    t_star = float(cand[int(np.argmax(j))])
-    return float(np.clip(t_star, lo, hi)), float(np.max(j))
+    vals = np.concatenate([pos_pool, neg_pool])
+    is_pos = np.concatenate([np.ones(n_pos, bool), np.zeros(n_neg, bool)])
+    order = np.argsort(vals, kind="mergesort")[::-1]  # descending value
+    vals_s = vals[order]
+    pos_s = is_pos[order]
+    tp = np.cumsum(pos_s)      # positives with value >= vals_s[k]  (TPR = tp/n_pos)
+    fp = np.cumsum(~pos_s)     # negatives with value >= vals_s[k]  (FPR = fp/n_neg)
+    j = tp / n_pos - fp / n_neg
+    k = int(np.argmax(j))
+    return float(np.clip(vals_s[k], lo, hi)), float(j[k])
 
 
 def _per_donor_mean_activation(expr, donor, mask, params, K, min_cells):
@@ -243,15 +248,64 @@ def score_matrix(expr2d, gene_names, donor, pop, pos_label="P", neg_labels=None,
                  min_cells=10):
     """Score every gene (columns of ``expr2d``) and return a ranked pandas DataFrame.
 
-    ``expr2d`` is (n_cells, n_genes) linear normalized abundance. For large matrices
-    run this on Modal (see modal_app/); it is an embarrassingly parallel loop.
+    Equivalent to looping ``score_gene`` but precomputes the (pop, donor) cell-index
+    groups ONCE, so per-gene work touches only the relevant groups instead of
+    rescanning all cells/donors. Scales to tens of thousands of genes x cells; run
+    on Modal for the largest matrices (embarrassingly parallel over gene blocks).
+
+    ``expr2d`` is (n_cells, n_genes) linear normalized abundance (CP10k).
     """
     import pandas as pd
 
     expr2d = np.asarray(expr2d, float)
-    rows = [
-        score_gene(g, expr2d[:, j], donor, pop, pos_label, neg_labels, params, weights, min_cells).as_row()
-        for j, g in enumerate(gene_names)
-    ]
+    donor = np.asarray(donor)
+    pop = np.asarray(pop)
+    neg = _neg_labels(neg_labels, pop, pos_label)
+    band = reachable_band(params)
+
+    # precompute (pop, donor) -> cell index array, once for all genes
+    gi = pd.DataFrame({"pop": pop, "donor": donor}).groupby(["pop", "donor"], sort=False).indices
+    pos_groups = [idx for (p, _), idx in gi.items() if p == pos_label and idx.size >= min_cells]
+    neg_groups_by_pop: dict = {}
+    for (p, _), idx in gi.items():
+        if p in neg and idx.size >= min_cells:
+            neg_groups_by_pop.setdefault(p, []).append(idx)
+    neg_groups_all = [idx for lst in neg_groups_by_pop.values() for idx in lst]
+
+    pos_cells = np.concatenate(pos_groups) if pos_groups else np.array([], int)
+    neg_cells = np.concatenate(neg_groups_all) if neg_groups_all else np.array([], int)
+    n_pos_donors = len(pos_groups)
+
+    rows = []
+    for j, g in enumerate(gene_names):
+        x = expr2d[:, j]
+        k_op, jstat = _youden_threshold(x[pos_cells], x[neg_cells], band)
+
+        pos_means = np.array([x[idx].mean() for idx in pos_groups])
+        neg_means = np.array([x[idx].mean() for idx in neg_groups_all])
+        sep = _auc(pos_means, neg_means) if pos_means.size and neg_means.size else np.nan
+
+        if pos_groups:
+            pos_act = np.array([hill_activation(x[idx], params, K=k_op).mean() for idx in pos_groups])
+            feas = float(pos_act.mean())
+            repro = (float(np.clip(1.0 - pos_act.std(ddof=1) / (pos_act.mean() + 1e-9), 0.0, 1.0))
+                     if pos_act.size >= 2 else np.nan)
+        else:
+            feas = repro = np.nan
+
+        per_pop = {pos_label: feas} if pos_groups else {}
+        offvals = []
+        for p, idxs in neg_groups_by_pop.items():
+            act = float(np.mean([hill_activation(x[idx], params, K=k_op).mean() for idx in idxs]))
+            per_pop[p] = act
+            offvals.append(act)
+        offmax = float(max(offvals)) if offvals else np.nan
+
+        row = {"gene": str(g), "RACS": racs(sep, feas, repro, offmax, weights),
+               "Sep": sep, "Feas": feas, "Repro": repro, "OffMax": offmax,
+               "k_op": k_op, "Youden_J": jstat, "n_donors": n_pos_donors}
+        row.update({f"act_{p}": v for p, v in per_pop.items()})
+        rows.append(row)
+
     df = pd.DataFrame(rows)
     return df.sort_values("RACS", ascending=False, na_position="last").reset_index(drop=True)
