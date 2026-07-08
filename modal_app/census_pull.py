@@ -108,95 +108,224 @@ def census_disease_scan(patterns: list[str] | None = None) -> dict:
     return out
 
 
-def _fetch_pop(census, obs_filter, label, tissue):
-    """Fetch one population as AnnData, tagged with population label."""
+@app.function(image=image, timeout=900)
+def population_probe(disease: str = "keloid", cell_types: str = "fibroblast",
+                     tissue: str = "skin", related: str = "") -> dict:
+    """Metadata-only donor/cell/dataset counts for P and H (and related diseases).
+
+    Cheap (reads obs columns only, no expression). Answers the critical question:
+    does this disease have enough biological donors for donor-aware statistics?
+
+    ``cell_types`` and ``related`` are comma-separated (Modal CLI can't parse list
+    annotations). e.g. --cell-types "fibroblast,myofibroblast" --related "cystic fibrosis".
+    """
     import cellxgene_census
 
-    adata = cellxgene_census.get_anndata(
-        census,
-        organism="Homo sapiens",
-        obs_value_filter=obs_filter,
-        obs_column_names=["donor_id", "cell_type", "disease", "tissue_general", "assay"],
-    )
+    cts = [c.strip() for c in cell_types.split(",") if c.strip()]
+    related_list = [r.strip() for r in related.split(",") if r.strip()]
+    ct_in = "[" + ", ".join(f"'{c}'" for c in cts) + "]"
+    cols = ["donor_id", "cell_type", "disease", "tissue_general", "assay", "dataset_id"]
+
+    def summarize(df, name):
+        return {
+            "population": name, "n_cells": int(len(df)),
+            "n_donors": int(df["donor_id"].nunique()) if len(df) else 0,
+            "n_datasets": int(df["dataset_id"].nunique()) if len(df) else 0,
+            "assays": sorted(df["assay"].astype(str).unique())[:6] if len(df) else [],
+            "cells_per_donor": (df.groupby("donor_id").size().describe()[["min", "50%", "max"]]
+                                .astype(int).to_dict() if len(df) else {}),
+        }
+
+    with cellxgene_census.open_soma(census_version=CENSUS_VERSION) as census:
+        obs = census["census_data"]["homo_sapiens"].obs
+
+        def q(vf):
+            return obs.read(value_filter=vf, column_names=cols).concat().to_pandas()
+
+        out = {"disease": disease, "cell_types": cts, "tissue": tissue, "populations": []}
+        out["populations"].append(summarize(
+            q(f"disease == '{disease}' and cell_type in {ct_in} and tissue_general == '{tissue}'"), "P (pathogenic)"))
+        out["populations"].append(summarize(
+            q(f"disease == 'normal' and cell_type in {ct_in} and tissue_general == '{tissue}'"), "H (healthy)"))
+        for rd in related_list:
+            out["populations"].append(summarize(
+                q(f"disease == '{rd}' and cell_type in {ct_in}"), f"R: {rd}"))
+
+    print(json.dumps(out, indent=2))
+    return out
+
+
+@app.function(image=image, timeout=900)
+def disease_composition(disease: str = "keloid", tissue: str = "") -> dict:
+    """Dump the ACTUAL cell_type / tissue labels used for a disease (no expression).
+
+    Reveals the real annotation vocabulary so we can build correct filters (the
+    generic 'fibroblast' CL term often isn't what datasets use)."""
+    import cellxgene_census
+
+    with cellxgene_census.open_soma(census_version=CENSUS_VERSION) as census:
+        obs = census["census_data"]["homo_sapiens"].obs
+        vf = f"disease == '{disease}'"
+        if tissue:
+            vf += f" and tissue_general == '{tissue}'"
+        df = obs.read(
+            value_filter=vf,
+            column_names=["donor_id", "cell_type", "tissue_general", "tissue", "assay", "dataset_id"],
+        ).concat().to_pandas()
+
+    out = {
+        "disease": disease,
+        "n_cells": int(len(df)),
+        "n_donors": int(df["donor_id"].nunique()) if len(df) else 0,
+        "n_datasets": int(df["dataset_id"].nunique()) if len(df) else 0,
+        "tissue_general": {k: int(v) for k, v in df["tissue_general"].value_counts().head(10).items()},
+        "cell_types": {k: int(v) for k, v in df["cell_type"].value_counts().head(30).items()},
+    }
+    print(json.dumps(out, indent=2))
+    return out
+
+
+@app.function(image=image, timeout=900)
+def celltype_across_disease(cell_type: str = "skin fibroblast", tissue: str = "") -> dict:
+    """Per-disease cell/donor/dataset counts for a given cell type. Gives P, H, and
+    the candidate R (related-disease) set in one shot."""
+    import cellxgene_census
+
+    with cellxgene_census.open_soma(census_version=CENSUS_VERSION) as census:
+        obs = census["census_data"]["homo_sapiens"].obs
+        vf = f"cell_type == '{cell_type}'"
+        if tissue:
+            vf += f" and tissue_general == '{tissue}'"
+        df = obs.read(
+            value_filter=vf,
+            column_names=["donor_id", "disease", "tissue_general", "dataset_id"],
+        ).concat().to_pandas()
+
+    g = (df.groupby("disease")
+         .agg(n_cells=("donor_id", "size"), n_donors=("donor_id", "nunique"),
+              n_datasets=("dataset_id", "nunique"))
+         .sort_values("n_cells", ascending=False))
+    g = g[g["n_cells"] > 0]
+    out = {"cell_type": cell_type, "total_cells": int(len(df)),
+           "by_disease": [{"disease": d, "n_cells": int(r.n_cells),
+                           "n_donors": int(r.n_donors), "n_datasets": int(r.n_datasets)}
+                          for d, r in g.head(40).iterrows()]}
+    print(json.dumps(out, indent=2))
+    return out
+
+
+def _fetch_pop(census, obs_filter, label, max_cells, rng):
+    """Fetch one population as AnnData, tag it, subsample to max_cells.
+
+    Robust: returns None on filter error (e.g. unsupported 'not in') or empty result.
+    """
+    import cellxgene_census
+    import numpy as np
+
+    try:
+        adata = cellxgene_census.get_anndata(
+            census, organism="Homo sapiens", obs_value_filter=obs_filter,
+            obs_column_names=["donor_id", "cell_type", "disease", "tissue_general", "assay"],
+        )
+    except Exception as e:
+        print(f"[skip {label}] {type(e).__name__}: {e}")
+        return None
+    if adata.n_obs == 0:
+        print(f"[empty {label}]")
+        return None
+    if adata.n_obs > max_cells:
+        idx = np.sort(rng.choice(adata.n_obs, size=max_cells, replace=False))
+        adata = adata[idx].copy()
     adata.obs["radar_pop"] = label
+    print(f"[{label}] {adata.n_obs} cells, {adata.obs['donor_id'].nunique()} donors")
     return adata
 
 
-@app.function(image=image, volumes={DATA: vol}, timeout=3600, memory=65536, cpu=8.0)
+@app.function(image=image, volumes={DATA: vol}, timeout=3600, memory=49152, cpu=8.0)
 def build_and_score(
     disease: str = "keloid",
-    pathogenic_cell_types: list[str] | None = None,
-    related_diseases: list[str] | None = None,
-    tissue: str = "skin",
-    min_detect_frac_in_P: float = 0.10,
+    pathogenic_cell_types: str = "skin fibroblast",
+    related_diseases: str = "",
+    tissue: str = "skin of body",
+    min_detect_frac: float = 0.10,
+    max_cells_per_pop: int = 40000,
     out_name: str = "keloid_fibroblast",
 ) -> dict:
-    """Assemble P/H/B/R populations, normalize, and run RACS. Writes to the Volume."""
+    """Assemble P/H/B/R populations, normalize, and run RACS. Writes to the Volume.
+
+    ``pathogenic_cell_types`` and ``related_diseases`` are comma-separated strings.
+    Related diseases are collapsed into one off-target group 'R' for scoring.
+    """
     import cellxgene_census
     import numpy as np
     import scanpy as sc
+    import anndata as ad
 
     from radar_scout.scoring import score_matrix
 
-    pathogenic_cell_types = pathogenic_cell_types or ["fibroblast"]
-    related_diseases = related_diseases or []
-    ct_in = "[" + ", ".join(f"'{c}'" for c in pathogenic_cell_types) + "]"
+    pct = [c.strip() for c in pathogenic_cell_types.split(",") if c.strip()]
+    related = [r.strip() for r in related_diseases.split(",") if r.strip()]
+    ct_in = "[" + ", ".join(f"'{c}'" for c in pct) + "]"
+    tis = f" and tissue_general == '{tissue}'" if tissue else ""
+    rng = np.random.default_rng(0)
 
     with cellxgene_census.open_soma(census_version=CENSUS_VERSION) as census:
         parts = []
-        # P: pathogenic cell type in the target disease
-        parts.append(_fetch_pop(
-            census, f"disease == '{disease}' and cell_type in {ct_in} and tissue_general == '{tissue}'",
-            "P", tissue))
-        # H: same cell type, healthy tissue
-        parts.append(_fetch_pop(
-            census, f"disease == 'normal' and cell_type in {ct_in} and tissue_general == '{tissue}'",
-            "H", tissue))
-        # B: bystander cell types in the diseased tissue
-        parts.append(_fetch_pop(
-            census, f"disease == '{disease}' and cell_type not in {ct_in} and tissue_general == '{tissue}'",
-            "B", tissue))
-        # R: pathogenic cell type in related diseases
-        if related_diseases:
-            rd_in = "[" + ", ".join(f"'{d}'" for d in related_diseases) + "]"
-            parts.append(_fetch_pop(
-                census, f"disease in {rd_in} and cell_type in {ct_in} and tissue_general == '{tissue}'",
-                "R", tissue))
+        p = _fetch_pop(census, f"disease == '{disease}' and cell_type in {ct_in}{tis}",
+                       "P", max_cells_per_pop, rng)
+        if p is None:
+            raise RuntimeError(f"No pathogenic cells: disease='{disease}', cell_type in {pct}")
+        parts.append(p)
+        parts.append(_fetch_pop(census, f"disease == 'normal' and cell_type in {ct_in}{tis}",
+                                "H", max_cells_per_pop, rng))
+        parts.append(_fetch_pop(census, f"disease == '{disease}' and cell_type not in {ct_in}{tis}",
+                                "B", max_cells_per_pop, rng))
+        for rd in related:  # each related disease -> its own tag, collapsed to R below
+            parts.append(_fetch_pop(census, f"disease == '{rd}' and cell_type in {ct_in}",
+                                    f"R::{rd}", max_cells_per_pop, rng))
 
-    import anndata as ad
-    adata = ad.concat([p for p in parts if p.n_obs > 0], join="inner", merge="same")
-    if adata.n_obs == 0:
-        raise RuntimeError(f"No cells found for disease='{disease}' — run census_disease_scan first.")
+    parts = [x for x in parts if x is not None]
+    adata = ad.concat(parts, join="inner", merge="same")
 
     # normalize to CP10k (linear) — the units the Hill model expects
     sc.pp.normalize_total(adata, target_sum=1e4)
-    expr = adata.X
-    expr = np.asarray(expr.todense()) if hasattr(expr, "todense") else np.asarray(expr)
 
-    pop = adata.obs["radar_pop"].to_numpy()
+    pop_detail = adata.obs["radar_pop"].astype(str).to_numpy()
+    pop = np.array(["R" if s.startswith("R::") else s for s in pop_detail])  # collapse related
     donor = adata.obs["donor_id"].astype(str).to_numpy()
 
-    # candidate genes: detected in >= min_detect_frac of pathogenic cells
-    is_p = pop == "P"
-    detect = (expr[is_p] > 0).mean(axis=0)
-    keep = np.where(detect >= min_detect_frac_in_P)[0]
-    genes = adata.var["feature_name"].to_numpy() if "feature_name" in adata.var else adata.var_names.to_numpy()
+    # candidate genes: detected in >= min_detect_frac of pathogenic cells (sparse-safe)
+    Xp = adata[pop == "P"].X
+    detect = np.asarray((Xp > 0).mean(axis=0)).ravel()
+    keep = np.where(detect >= min_detect_frac)[0]
 
-    df = score_matrix(expr[:, keep], genes[keep], donor, pop, pos_label="P")
+    sub = adata[:, keep]
+    X = sub.X
+    X = np.asarray(X.todense()) if hasattr(X, "todense") else np.asarray(X)  # only candidate genes
+    genes = (sub.var["feature_name"] if "feature_name" in sub.var else sub.var_names).to_numpy().astype(str)
 
-    counts = {p: int((pop == p).sum()) for p in ["P", "H", "B", "R"]}
-    n_donor = {p: int(len(set(donor[pop == p]))) for p in ["P", "H", "B", "R"]}
+    df = score_matrix(X, genes, donor, pop, pos_label="P")
+
+    ucounts = sorted(set(pop_detail))
+    counts = {u: int((pop_detail == u).sum()) for u in ucounts}
+    ndon = {u: int(len(set(donor[pop_detail == u]))) for u in ucounts}
 
     out_path = f"{DATA}/{out_name}_racs.parquet"
     df.to_parquet(out_path)
-    meta = {"disease": disease, "tissue": tissue, "cell_counts": counts,
-            "n_donors": n_donor, "n_candidate_genes": int(len(keep)),
-            "census_version": CENSUS_VERSION, "out": out_path,
-            "top20": df.head(20).to_dict(orient="records")}
+    meta = {"disease": disease, "tissue": tissue, "pathogenic_cell_types": pct,
+            "related_diseases": related, "cell_counts": counts, "n_donors": ndon,
+            "n_candidate_genes": int(len(keep)), "census_version": CENSUS_VERSION,
+            "out": out_path, "top25": df.head(25).to_dict(orient="records")}
     with open(f"{DATA}/{out_name}_meta.json", "w") as fh:
         json.dump(meta, fh, indent=2, default=float)
     vol.commit()
-    print(json.dumps({k: meta[k] for k in ("cell_counts", "n_donors", "n_candidate_genes")}, indent=2))
+
+    print(json.dumps({"cell_counts": counts, "n_donors": ndon,
+                      "n_candidate_genes": int(len(keep))}, indent=2))
+    print("TOP 15 RADAR targets:")
+    for r in df.head(15).to_dict("records"):
+        print(f"  {str(r['gene'])[:16]:16s} RACS={r['RACS']:.3f}  Sep={r['Sep']:.3f}  "
+              f"Feas={r['Feas']:.3f}  Repro={r.get('Repro', float('nan')):.3f}  Off={r['OffMax']:.3f}")
     return meta
 
 

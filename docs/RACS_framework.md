@@ -204,9 +204,9 @@ per donor and aggregated, and each maps to one spec requirement:
 
 | Factor | Definition (donor-aware) | Spec requirement covered |
 |---|---|---|
-| $\mathrm{Sep}(g)$ | donor-mean $\mathrm{AUC}$ of $x_g$ for $P$ vs pooled $O$ | cell-type + disease specificity, detection freq (threshold-free) |
+| $\mathrm{Sep}(g)$ | **donor-level** $\mathrm{AUC}$: pseudobulk each donor, then $P$-donors vs $O$-donors | cell-type + disease specificity, detection freq (threshold-free) |
 | $\mathrm{Feas}(g)$ | donor-mean $\bar A_P$ at best reachable threshold $K^\star\wedge K_\text{lo}$ | abundance ≥ activation threshold, detection frequency |
-| $\mathrm{Repro}(g)$ | $1-\mathrm{CV}_{\text{donor}}\big(W^{(j)}\big)$, clipped to $[0,1]$ | donor / cohort reproducibility |
+| $\mathrm{Repro}(g)$ | $1-\mathrm{CV}$ of on-target activation across pathogenic donors | donor / cohort reproducibility |
 | $\mathrm{OffMax}(g)$ | $\max_{o\in\{H,B,R\}}$ donor-mean $\bar A_o$ at $K^\star$ | healthy penalty + off-target + cross-disease |
 
 `Sep` also reports the Youden $J$ and the ROC-optimal reachable threshold; a
@@ -225,10 +225,17 @@ plug-in alternative (the significance score of Lu et al. [5]) is provided in
   one profile per donor per population. Used for mixed-effects differential
   expression (`statsmodels` MixedLM with a `(1|donor)` random effect, or a
   pseudobulk limma/DESeq2-style test) as an orthogonal DE readout.
-- **AUC / activation / window**: computed **within each donor** from that donor's
-  own cells, then averaged over donors; standard errors from between-donor
-  variance. Donors lacking either $P$ or the relevant off-target cells are
-  dropped from that estimate (cannot be estimated within-donor).
+- **Separability (AUC)** is estimated at the **donor level**: each donor is
+  summarized by its mean expression (pseudobulk), then $\mathrm{AUC}$ compares
+  pathogenic donors against off-target donors. This is the correct unit for
+  cross-condition designs, where pathogenic and healthy cells come from
+  *different individuals* — a within-donor $P$-vs-$O$ AUC is undefined. (When a
+  donor does contribute cells to both sides, e.g. pathogenic vs bystander cells
+  in the same patient, it contributes a summary to each set.)
+- **Activation / feasibility / off-target** are per-donor means over that donor's
+  cells, averaged across the donors of the relevant condition; SEs from
+  between-donor variance. **Reproducibility** is the coefficient of variation of
+  on-target activation across pathogenic donors.
 - **Threshold calibration** $(K_\text{lo}, K_\text{hi}, n, L)$: digitized from the
   published RADAR/RADARS dose–response (sensor output vs. target abundance) and
   converted into CP10k units. Current values in `hill.py` are **documented

@@ -75,9 +75,16 @@ def _per_donor_mean_activation(expr, donor, mask, params, K, min_cells):
 # RACS component scores (donor-aware)
 # --------------------------------------------------------------------------- #
 def separability(expr, donor, pop, pos_label="P", neg_labels=None, min_cells=10) -> float:
-    """Sep(g): donor-mean AUC of abundance discriminating P vs pooled off-target.
+    """Sep(g): DONOR-LEVEL AUC discriminating pathogenic vs off-target donors.
 
-    Threshold-free; captures cell-type + disease specificity + detection freq.
+    Each donor is summarized by its mean expression (the donor is the experimental
+    unit), then AUC = P(pathogenic-donor summary > off-target-donor summary). This
+    is the correct anti-pseudoreplication specificity for cross-condition designs,
+    where pathogenic and healthy cells come from *different individuals* (so a
+    within-donor P-vs-O comparison is impossible). A donor contributing cells to
+    both sides (mixed designs) contributes a summary to both sets.
+
+    Threshold-free; captures cell-type + disease specificity + detection frequency.
     """
     expr = np.asarray(expr, float)
     donor = np.asarray(donor)
@@ -85,14 +92,18 @@ def separability(expr, donor, pop, pos_label="P", neg_labels=None, min_cells=10)
     neg = _neg_labels(neg_labels, pop, pos_label)
     is_pos = pop == pos_label
     is_neg = np.isin(pop, neg)
-    aucs = []
+    pos_summ, neg_summ = [], []
     for d in np.unique(donor):
         dm = donor == d
-        p = expr[dm & is_pos]
-        n = expr[dm & is_neg]
-        if p.size >= min_cells and n.size >= min_cells:
-            aucs.append(_auc(p, n))
-    return float(np.nanmean(aucs)) if aucs else np.nan
+        pc = expr[dm & is_pos]
+        if pc.size >= min_cells:
+            pos_summ.append(float(pc.mean()))
+        nc = expr[dm & is_neg]
+        if nc.size >= min_cells:
+            neg_summ.append(float(nc.mean()))
+    if not pos_summ or not neg_summ:
+        return np.nan
+    return _auc(np.asarray(pos_summ), np.asarray(neg_summ))
 
 
 def feasibility(expr, donor, pop, pos_label="P", params: HillParams = DEFAULT_HILL,
@@ -131,35 +142,24 @@ def off_target_max(expr, donor, pop, pos_label="P", neg_labels=None,
     return float(max(per_pop.values())), per_pop
 
 
-def reproducibility(expr, donor, pop, pos_label="P", neg_labels=None,
+def reproducibility(expr, donor, pop, pos_label="P",
                     params: HillParams = DEFAULT_HILL, K=None, min_cells=10) -> float:
-    """Repro(g): donor consistency of the therapeutic window, 1 - CV, clipped [0,1].
+    """Repro(g): consistency of on-target activation across PATHOGENIC donors.
 
-    Window per donor = A_P(donor) - max_o A_o(donor). NaN if < 2 assessable donors
-    (absence of evidence, handled as neutral by ``racs``).
+    1 - CV over pathogenic donors of their mean RADAR activation, clipped to [0,1].
+    A target that fires in every pathogenic donor scores high; one driven by a
+    single donor scores low. NaN if < 2 pathogenic donors (absence of evidence,
+    handled as neutral by ``racs``). This is the donor/cohort reproducibility term
+    and the structural guard against a result resting on a single patient.
     """
     expr = np.asarray(expr, float)
     donor = np.asarray(donor)
     pop = np.asarray(pop)
-    neg = _neg_labels(neg_labels, pop, pos_label)
-    windows = []
-    for d in np.unique(donor):
-        dm = donor == d
-        p = expr[dm & (pop == pos_label)]
-        if p.size < min_cells:
-            continue
-        a_p = float(np.mean(hill_activation(p, params, K=K)))
-        a_offs = []
-        for o in neg:
-            oc = expr[dm & (pop == o)]
-            if oc.size >= min_cells:
-                a_offs.append(float(np.mean(hill_activation(oc, params, K=K))))
-        if a_offs:
-            windows.append(a_p - max(a_offs))
-    if len(windows) < 2:
+    per_donor = _per_donor_mean_activation(expr, donor, pop == pos_label, params, K, min_cells)
+    vals = np.asarray(list(per_donor.values()))
+    if vals.size < 2:
         return np.nan
-    w = np.asarray(windows)
-    cv = w.std(ddof=1) / (abs(w.mean()) + 1e-9)
+    cv = vals.std(ddof=1) / (vals.mean() + 1e-9)
     return float(np.clip(1.0 - cv, 0.0, 1.0))
 
 
@@ -221,7 +221,7 @@ def score_gene(gene, expr, donor, pop, pos_label="P", neg_labels=None,
     sep = separability(expr, donor, pop, pos_label, neg, min_cells)
     feas = feasibility(expr, donor, pop, pos_label, params, K=k_op, min_cells=min_cells)
     offmax, per_pop = off_target_max(expr, donor, pop, pos_label, neg, params, K=k_op, min_cells=min_cells)
-    repro = reproducibility(expr, donor, pop, pos_label, neg, params, K=k_op, min_cells=min_cells)
+    repro = reproducibility(expr, donor, pop, pos_label, params, K=k_op, min_cells=min_cells)
     score = racs(sep, feas, repro, offmax, weights)
 
     n_donors = int(sum(

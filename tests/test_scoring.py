@@ -125,3 +125,34 @@ def test_pseudobulk_shapes():
     assert all(g in pb.columns for g in genes)
     norm = cpm_normalize(pb)
     assert norm[genes].to_numpy().min() >= 0.0
+
+
+def test_nested_donor_design():
+    """Real designs nest donors within condition (keloid patients vs healthy
+    donors), so no donor has both P and O cells. Donor-level separability must
+    still work — the old within-donor AUC would return NaN here and zero out RACS.
+    """
+    rng = np.random.default_rng(1)
+    donor, pop, ideal, hk = [], [], [], []
+    conditions = [("P", 4, (0.9, 25.0)), ("H", 3, (0.1, 1.0)), ("R", 3, (0.15, 1.5))]
+    hk_spec = (0.95, 25.0)
+    did = 0
+    for cond, ndon, (frac, level) in conditions:
+        for _ in range(ndon):
+            ideal.append(_draw(rng, N_PER, frac, level))
+            hk.append(_draw(rng, N_PER, *hk_spec))
+            donor.append(np.full(N_PER, f"d{did}"))
+            pop.append(np.full(N_PER, cond))
+            did += 1
+    donor = np.concatenate(donor)
+    pop = np.concatenate(pop)
+    expr = np.column_stack([np.concatenate(ideal), np.concatenate(hk)])
+
+    si = score_gene("IDEAL", expr[:, 0], donor, pop, pos_label="P")
+    sh = score_gene("HK", expr[:, 1], donor, pop, pos_label="P")
+
+    assert not np.isnan(si.sep)      # the within-donor bug would make this NaN
+    assert si.sep > 0.9              # keloid donors separate from healthy/related donors
+    assert sh.sep < si.sep           # housekeeping is a weaker separator (noisy w/ 4 donors)
+    assert si.n_donors == 4          # 4 pathogenic donors
+    assert si.racs > 3 * sh.racs     # composite strongly favors the ideal target
