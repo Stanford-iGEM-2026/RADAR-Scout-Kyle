@@ -131,37 +131,40 @@ class RadarDesign:
     notes: list[str] = field(default_factory=list)
 
 
-def design_validation_primers(cds: str, tm_target: float = 60.0,
+def design_validation_primers(cds: str, tm_target: float = 52.0, tm_tol: float = 5.0,
                               product_range=(90, 150), plen_range=(18, 24)) -> PrimerPair | None:
-    """Pick a qPCR primer pair for the target: Tm near target, GC 40-60%, no long runs."""
+    """Pick a qPCR primer pair for the target: matched Tm, GC 35-65%, no long runs.
+
+    ``tm_nn`` is a *monovalent* nearest-neighbor Tm; typical Mg2+ qPCR buffers run
+    ~6-9 C hotter, so the default target of 52 C corresponds to ~58-61 C at the bench.
+    Searches the whole CDS and returns the first well-matched pair (or None).
+    """
     s = cds.upper().replace("U", "T")
     n = len(s)
 
     def ok(p):
-        if not (0.4 <= gc_fraction(p) <= 0.6):
+        if not (0.35 <= gc_fraction(p) <= 0.65):
             return False
         if any(b * 5 in p for b in "ACGT"):  # avoid >=5 homopolymer
             return False
-        return abs(tm_nn(p) - tm_target) <= 3.0
+        return abs(tm_nn(p) - tm_target) <= tm_tol
 
-    # search a window in the middle third of the CDS for a valid pair
-    start_lo, start_hi = n // 3, min(n - product_range[1] - plen_range[1], 2 * n // 3)
-    for fstart in range(max(0, start_lo), max(start_lo + 1, start_hi)):
+    last = n - product_range[0] - plen_range[0]
+    for fstart in range(0, max(1, last)):
         for flen in range(*plen_range):
             fwd = s[fstart:fstart + flen]
             if len(fwd) < flen or not ok(fwd):
                 continue
             for prod in range(product_range[0], product_range[1] + 1, 5):
                 rend = fstart + prod
+                if rend > n:
+                    break
                 for rlen in range(*plen_range):
                     rstart = rend - rlen
                     if rstart <= fstart + flen:
                         continue
-                    rev_template = s[rstart:rend]
-                    if len(rev_template) < rlen:
-                        continue
-                    rev = reverse_complement(rev_template)
-                    if ok(rev) and abs(tm_nn(fwd) - tm_nn(rev)) <= 2.0:
+                    rev = reverse_complement(s[rstart:rend])
+                    if len(rev) == rlen and ok(rev) and abs(tm_nn(fwd) - tm_nn(rev)) <= 2.0:
                         return PrimerPair(fwd, rev, tm_nn(fwd), tm_nn(rev), prod, fstart)
     return None
 
@@ -224,9 +227,10 @@ def design_target(gene: str, species: str = "homo_sapiens", guide_len: int = 120
         f"Editable A ADAR-context score {ctx:.2f} (5'U/3'G is optimal).",
         "BsaI (GGTCTC) used for Golden Gate; ensure the insert is domesticated "
         "(no internal BsaI sites) before ordering.",
+        "qPCR Tm is monovalent nearest-neighbor; add ~6-9 C for a Mg2+ qPCR buffer.",
     ]
     if qpcr is None:
-        notes.append("No qPCR pair met Tm/GC constraints in the default window; relax and retry.")
+        notes.append("No qPCR pair met Tm/GC constraints; relax tm_tol/product_range and retry.")
     return RadarDesign(gene=gene, transcript_id=tid, sensor_guide=guide, edit_site_index=edit_i,
                        context_score=ctx, guide_fwd_primer=gf, guide_rev_primer=gr,
                        qpcr=qpcr, notes=notes)
