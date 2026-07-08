@@ -18,6 +18,7 @@ from .scoring import (
     GeneScore,
 )
 from .specificity import significance_score, tau_specificity
+from .ontology import resolve, resolve_disease, resolve_cell_type, OntologyHit
 
 __version__ = "0.1.0"
 
@@ -35,5 +36,9 @@ __all__ = [
     "GeneScore",
     "significance_score",
     "tau_specificity",
+    "resolve",
+    "resolve_disease",
+    "resolve_cell_type",
+    "OntologyHit",
     "__version__",
 ]

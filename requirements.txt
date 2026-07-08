@@ -11,3 +11,4 @@ anndata
 pyarrow
 pytest
 modal
+certifi

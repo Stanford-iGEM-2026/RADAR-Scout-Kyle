@@ -30,13 +30,11 @@ app = modal.App("radar-scout")
 image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install(
-        "cellxgene-census==1.15.0",
-        "scanpy==1.10.3",
-        "anndata>=0.10",
-        "numpy<2.1",
-        "scipy",
-        "pandas",
-        "scikit-learn",
+        # must be recent enough to read the current Census SOMA encoding (>=1.1.0);
+        # pulls a compatible tiledbsoma. Older pins fail with "Unsupported SOMA
+        # object encoding version".
+        "cellxgene-census==1.18.0",
+        "scanpy",
         "pyarrow",
     )
     # ship the scoring package so RACS runs on Modal
@@ -46,7 +44,7 @@ image = (
 vol = modal.Volume.from_name("radar-scout-data", create_if_missing=True)
 DATA = "/data"
 
-CENSUS_VERSION = "stable"  # resolved+recorded at runtime for reproducibility
+CENSUS_VERSION = "2025-11-08"  # pinned LTS for reproducibility (was "stable" on 2026-07-08)
 
 # Terms we care about for the keloid / fibrosis first vertical. Extended via CLI.
 SCAN_PATTERNS = ["keloid", "scar", "fibro", "sclerosis", "dermat", "skin", "wound", "cheloid"]
@@ -54,32 +52,57 @@ SCAN_PATTERNS = ["keloid", "scar", "fibro", "sclerosis", "dermat", "skin", "woun
 
 @app.function(image=image, timeout=900)
 def census_disease_scan(patterns: list[str] | None = None) -> dict:
-    """Report available diseases (cell counts) matching patterns. Cheap."""
+    """Report available diseases (cell counts) matching patterns. Cheap.
+
+    Schema-robust: the summary_cell_counts column names vary across Census
+    versions, so we detect the organism/category/label/count columns dynamically
+    and echo the real column list.
+    """
     import cellxgene_census
-    import pandas as pd
 
     patterns = [p.lower() for p in (patterns or SCAN_PATTERNS)]
     with cellxgene_census.open_soma(census_version=CENSUS_VERSION) as census:
-        resolved = census["census_info"]["summary"].read().concat().to_pandas()
-        version = dict(zip(resolved["label"], resolved["value"])).get(
-            "census_schema_version", CENSUS_VERSION
-        )
         sccc = census["census_info"]["summary_cell_counts"].read().concat().to_pandas()
 
-    hs = sccc[(sccc["organism"] == "Homo sapiens")]
-    diseases = hs[hs["category"] == "disease"].copy()
-    diseases["label_l"] = diseases["label"].str.lower()
-    hit = diseases[diseases["label_l"].apply(lambda s: any(p in s for p in patterns))]
-    hit = hit.sort_values("total_cell_count", ascending=False)
+    print("SCCC COLUMNS:", list(sccc.columns), "| SHAPE", sccc.shape)
+    lc = {c.lower(): c for c in sccc.columns}
+
+    def col(*cands):
+        for c in cands:
+            if c in lc:
+                return lc[c]
+        return None
+
+    org_c = col("organism")
+    cat_c = col("category")
+    lab_c = col("label", "ontology_term_label", "ontology_term_id")
+    cnt_c = col("total_cell_count", "unique_cell_count", "n_cells", "count")
+
+    # probe the actual vocabulary (varies across Census versions)
+    print("CATEGORIES:", sorted(sccc[cat_c].astype(str).unique())[:30] if cat_c else None)
+    print("ORGANISMS:", sorted(sccc[org_c].astype(str).unique())[:10] if org_c else None)
+
+    diseases = sccc[sccc[cat_c].astype(str).str.lower() == "disease"].copy() if cat_c else sccc.copy()
+    if org_c is not None and diseases.shape[0]:
+        org_vals = diseases[org_c].astype(str)
+        mask = org_vals.str.contains("sapiens", case=False, na=False) | org_vals.str.contains("9606", na=False)
+        if mask.any():
+            diseases = diseases[mask].copy()
+    diseases["_label_l"] = diseases[lab_c].astype(str).str.lower()
+    hit = diseases[diseases["_label_l"].apply(lambda s: any(p in s for p in patterns))]
+    have_cnt = cnt_c is not None and cnt_c in hit.columns
+    if have_cnt:
+        hit = hit.sort_values(cnt_c, ascending=False)
 
     out = {
-        "census_version": str(version),
+        "census_version": CENSUS_VERSION,
+        "columns": list(sccc.columns),
+        "count_col": cnt_c,
+        "n_disease_terms": int(diseases.shape[0]),
         "matched_diseases": [
-            {"disease": r["label"], "total_cells": int(r["total_cell_count"]),
-             "unique_cells": int(r.get("unique_cell_count", r["total_cell_count"]))}
+            {"disease": r[lab_c], "cells": int(r[cnt_c]) if have_cnt else None}
             for _, r in hit.iterrows()
         ],
-        "n_total_disease_categories": int((hs["category"] == "disease").sum()),
     }
     print(json.dumps(out, indent=2))
     return out
@@ -182,7 +205,9 @@ def main():
     """Default: run the cheap disease scan and print what's available."""
     res = census_disease_scan.remote()
     print("\n=== RADAR-Scout Census scan ===")
+    print("summary_cell_counts columns:", res.get("columns"))
     for d in res["matched_diseases"]:
-        print(f"  {d['disease']:45s} {d['total_cells']:>12,} cells")
+        cells = d.get("cells")
+        print(f"  {d['disease']:45s} {cells:>12,} cells" if cells is not None else f"  {d['disease']}")
     if not res["matched_diseases"]:
         print("  (no matching diseases in Census — fall back to a GEO loader)")
