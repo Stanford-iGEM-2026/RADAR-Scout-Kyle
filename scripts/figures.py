@@ -312,12 +312,41 @@ def fig_forest(umap, outdir, gene=None):
     plt.close(fig)
 
 
+def fig_paga(paga, outdir):
+    """PAGA graph: cluster nodes at their UMAP centroid, sized by cell count, colored
+    by dominant population; edge width = connectivity (differentiation relatedness)."""
+    nodes, edges = paga.get("nodes", []), paga.get("edges", [])
+    if not nodes:
+        return
+    pos = {n["cluster"]: (n["x"], n["y"]) for n in nodes}
+    palette = {"P": CRIMSON, "B": "#bdbdbd", "H": TEAL, "R": "#e6a23c"}
+    fig, ax = plt.subplots(figsize=(5.2, 4.6))
+    for e in edges:
+        if e["a"] in pos and e["b"] in pos:
+            (x1, y1), (x2, y2) = pos[e["a"]], pos[e["b"]]
+            ax.plot([x1, x2], [y1, y2], color="#cccccc", lw=0.5 + 4 * e["w"], alpha=0.6, zorder=1)
+    for n in nodes:
+        dom = max(n["pop"], key=n["pop"].get) if n["pop"] else "?"
+        ax.scatter(n["x"], n["y"], s=40 + n["n"] / 15, color=palette.get(dom, "#999"),
+                   edgecolor="white", linewidth=1.2, zorder=2)
+        ax.annotate(n["cluster"], (n["x"], n["y"]), fontsize=7, ha="center", va="center", zorder=3)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_xlabel("UMAP1")
+    ax.set_ylabel("UMAP2")
+    ax.set_title("PAGA — cell-state connectivity (node color = dominant population)", fontsize=9)
+    fig.tight_layout()
+    fig.savefig(Path(outdir) / "fig_paga.png", bbox_inches="tight")
+    plt.close(fig)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("parquet")
     ap.add_argument("--meta", default=None)
     ap.add_argument("--de", default=None)
     ap.add_argument("--umap", default=None)
+    ap.add_argument("--paga", default=None)
     ap.add_argument("--outdir", default="figures")
     args = ap.parse_args()
 
@@ -341,6 +370,8 @@ def main():
         fig_violin(um, args.outdir)
         fig_forest(um, args.outdir, gene=str(df.iloc[0]["gene"]) if len(df) else None)
         n += 3
+    if args.paga and Path(args.paga).exists():
+        fig_paga(json.load(open(args.paga)), args.outdir); n += 1
 
     title = ""
     if args.meta and Path(args.meta).exists():

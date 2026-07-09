@@ -37,6 +37,8 @@ image = (
         "scanpy",
         "leidenalg",
         "igraph",
+        "harmonypy",   # batch correction
+        "scikit-image",  # scrublet dep
         "pyarrow",
     )
     # ship the scoring package so RACS runs on Modal
@@ -243,6 +245,28 @@ def _fetch_pop(census, obs_filter, label, max_cells, rng):
     return adata
 
 
+def _save_paga(lg, pop, path):
+    """Save the PAGA graph (cluster connectivities + UMAP centroids + population mix)."""
+    import json
+
+    import numpy as np
+    import pandas as pd
+
+    conn = lg.uns["paga"]["connectivities"]
+    conn = conn.toarray() if hasattr(conn, "toarray") else np.asarray(conn)
+    clusters = lg.obs["leiden"].to_numpy()
+    cats = list(lg.obs["leiden"].cat.categories)
+    xy = lg.obsm["X_umap"]
+    nodes = [{"cluster": str(c), "x": float(xy[clusters == c, 0].mean()),
+              "y": float(xy[clusters == c, 1].mean()), "n": int((clusters == c).sum()),
+              "pop": {k: round(float(v), 2) for k, v in
+                      pd.Series(pop[clusters == c]).value_counts(normalize=True).items()}}
+             for c in cats]
+    edges = [{"a": str(cats[i]), "b": str(cats[j]), "w": round(float(conn[i, j]), 3)}
+             for i in range(len(cats)) for j in range(i + 1, len(cats)) if conn[i, j] > 0.05]
+    json.dump({"nodes": nodes, "edges": edges}, open(path, "w"))
+
+
 @app.function(image=image, volumes={DATA: vol}, timeout=7200, memory=65536, cpu=8.0)
 def build_and_score(
     disease: str = "melanoma",
@@ -323,6 +347,17 @@ def build_and_score(
     adata = ad.concat(parts, join="inner", merge="same")
     adata.obs_names_make_unique()
 
+    # QC: doublet removal (per donor) on raw counts (spec: data harmonization)
+    try:
+        sc.pp.scrublet(adata, batch_key="donor_id")
+        db = adata.obs.get("predicted_doublet")
+        if db is not None:
+            n_db = int(db.sum())
+            adata = adata[~db.to_numpy()].copy()
+            print(f"[qc] removed {n_db} predicted doublets")
+    except Exception as e:
+        print(f"[qc] scrublet skipped: {type(e).__name__}: {e}")
+
     adata.layers["counts"] = adata.X.copy()         # raw counts (carried for DE)
     sc.pp.normalize_total(adata, target_sum=1e4)    # linear CP10k for scoring
 
@@ -401,7 +436,7 @@ def build_and_score(
     except Exception as e:
         print(f"[de] skipped: {type(e).__name__}: {e}")
 
-    # UMAP for the dashboard (subsampled to <=8k cells)
+    # UMAP for the dashboard (subsampled to <=8k cells), batch-corrected + PAGA
     umap_saved = False
     if compute_umap:
         try:
@@ -409,8 +444,23 @@ def build_and_score(
             sc.pp.log1p(lg)
             sc.pp.highly_variable_genes(lg, n_top_genes=2000)
             sc.pp.pca(lg, n_comps=30)
-            sc.pp.neighbors(lg, n_neighbors=15)
+            rep = "X_pca"
+            try:  # batch correction across donors (spec: data harmonization)
+                sc.external.pp.harmony_integrate(lg, "donor_id")
+                rep = "X_pca_harmony"
+            except Exception as e:
+                print(f"[umap] harmony skipped: {type(e).__name__}: {e}")
+            sc.pp.neighbors(lg, n_neighbors=15, use_rep=rep)
             sc.tl.umap(lg)
+            try:  # PAGA trajectory over leiden clusters
+                try:
+                    sc.tl.leiden(lg, resolution=1.0, flavor="igraph", n_iterations=2, directed=False)
+                except (TypeError, ImportError):
+                    sc.tl.leiden(lg, resolution=1.0)
+                sc.tl.paga(lg, groups="leiden")
+                _save_paga(lg, pop, f"{DATA}/{out_name}_paga.json")
+            except Exception as e:
+                print(f"[paga] skipped: {type(e).__name__}: {e}")
             xy = lg.obsm["X_umap"]
             idx = np.sort(rng.choice(lg.n_obs, size=min(lg.n_obs, 8000), replace=False))
             gpos = {g: i for i, g in enumerate(genes)}
