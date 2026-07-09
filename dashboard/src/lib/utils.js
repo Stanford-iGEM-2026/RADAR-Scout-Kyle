@@ -23,6 +23,14 @@ export const COMPONENTS = [
 
 // The two ways a target can be ranked.
 export const RANK_METRICS = {
+  pooled_score: {
+    key: 'pooled_score',
+    label: 'Pooled',
+    long: 'Pooled target ranking',
+    blurb: 'consensus across all cohorts of this disease',
+    d: 1,
+    color: '#8e1918',
+  },
   RACS: {
     key: 'RACS',
     label: 'RACS',

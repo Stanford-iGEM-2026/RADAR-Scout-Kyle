@@ -1,93 +1,74 @@
 {
   "diseases": [
     {
-      "key": "melanoma_malignant",
-      "disease": "melanoma",
-      "cell_type": "malignant cell",
-      "cohort": "CELLxGENE",
-      "n_genes": 9823,
-      "n_donors": {
-        "B": 57,
-        "H": 83,
-        "P": 64
-      },
-      "reference_pop": "H",
-      "has_umap": true,
-      "subpop": {}
-    },
-    {
-      "key": "keloid_v2",
       "disease": "keloid",
-      "cell_type": "skin fibroblast",
-      "cohort": "CELLxGENE",
-      "n_genes": 7617,
-      "n_donors": {},
-      "reference_pop": null,
-      "has_umap": false,
-      "subpop": {}
-    },
-    {
-      "key": "keloid_subpop",
-      "disease": "keloid",
-      "cell_type": "skin fibroblast",
-      "cohort": "CELLxGENE",
-      "n_genes": 5755,
+      "key": "keloid_pooled",
+      "n_genes": 10807,
+      "n_cohorts": 3,
       "n_donors": {
         "B": 4,
         "H": 214,
         "P": 4
       },
-      "reference_pop": "H",
+      "umap_key": "keloid_subpop",
       "has_umap": true,
-      "subpop": {
-        "path_cluster": "5",
-        "disease_frac": 0.22472594397076737,
-        "n_clusters": 21,
-        "n_P_after": 369
-      }
+      "cohorts": [
+        {
+          "key": "keloid_subpop",
+          "cohort": "CELLxGENE",
+          "cell_type": "skin fibroblast"
+        },
+        {
+          "key": "keloid_geo",
+          "cohort": "GEO GSE163973",
+          "cell_type": "skin fibroblast"
+        },
+        {
+          "key": "keloid_deng_mfb",
+          "cohort": "Deng MFB vs normal scar",
+          "cell_type": "pathological MFB (Deng C3)"
+        }
+      ]
     },
     {
-      "key": "pulmonary_fibrosis",
+      "disease": "melanoma",
+      "key": "melanoma_pooled",
+      "n_genes": 9812,
+      "n_cohorts": 1,
+      "n_donors": {
+        "B": 57,
+        "H": 83,
+        "P": 64
+      },
+      "umap_key": "melanoma_malignant",
+      "has_umap": true,
+      "cohorts": [
+        {
+          "key": "melanoma_malignant",
+          "cohort": "CELLxGENE",
+          "cell_type": "malignant cell"
+        }
+      ]
+    },
+    {
       "disease": "pulmonary fibrosis",
-      "cell_type": "fibroblast",
-      "cohort": "CELLxGENE",
-      "n_genes": 7632,
+      "key": "pulmonary_fibrosis_pooled",
+      "n_genes": 7616,
+      "n_cohorts": 1,
       "n_donors": {
         "B": 55,
         "H": 422,
         "P": 3
       },
-      "reference_pop": "H",
+      "umap_key": "pulmonary_fibrosis",
       "has_umap": true,
-      "subpop": {
-        "path_cluster": "17",
-        "disease_frac": 0.9874476987447699,
-        "baseline_frac": 0.22280598128516804,
-        "n_clusters": 34,
-        "n_P_after": 236
-      }
-    },
-    {
-      "key": "keloid_geo",
-      "disease": "keloid",
-      "cell_type": "skin fibroblast",
-      "cohort": "GEO GSE163973",
-      "n_genes": 10819,
-      "n_donors": {},
-      "reference_pop": null,
-      "has_umap": false,
-      "subpop": {}
-    },
-    {
-      "key": "keloid_deng_mfb",
-      "disease": "keloid",
-      "cell_type": "pathological MFB (Deng C3)",
-      "cohort": "Deng MFB vs normal scar",
-      "n_genes": 8407,
-      "n_donors": {},
-      "reference_pop": null,
-      "has_umap": false,
-      "subpop": {}
+      "cohorts": [
+        {
+          "key": "pulmonary_fibrosis",
+          "cohort": "CELLxGENE",
+          "cell_type": "fibroblast"
+        }
+      ]
     }
   ]
 }

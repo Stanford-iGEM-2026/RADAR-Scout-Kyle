@@ -29,7 +29,8 @@ _TECH_REGEX = re.compile(
     r"SNOR|SCARNA|MIR[0-9]|"                  # small ncRNA
     r"LINC[0-9]|"                             # long intergenic ncRNA
     r"HB[ABDGEZQM][0-9]|HBA|HBB|"             # hemoglobin
-    r"RP11-|RP4-|RP5-|AC[0-9]{6}|AL[0-9]{6}|AP00|CTD-|CTC-|CTA-)",  # clone names
+    r"RP11-|RP4-|RP5-|AC[0-9]{6}|AL[0-9]{6}|AP00|CTD-|CTC-|CTA-|"   # clone names
+    r"ENSG[0-9]{6}|^LOC[0-9]{4})",                                    # unannotated genes
     re.IGNORECASE,
 )
 
