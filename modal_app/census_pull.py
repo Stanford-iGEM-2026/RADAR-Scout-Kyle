@@ -282,34 +282,46 @@ def build_and_score(
     rng = np.random.default_rng(0)
 
     with cellxgene_census.open_soma(census_version=CENSUS_VERSION) as census:
-        # 1) whole diseased tissue (all cell types) -> P (pathogenic) vs B (bystander)
-        dis = _fetch_pop(census, f"disease == '{disease}'{tis}", "DIS", max_cells_per_pop * 2, rng)
-        if dis is None:
-            raise RuntimeError(f"No diseased cells for disease='{disease}'")
-        ctl = dis.obs["cell_type"].astype(str)
-        low = ctl.str.lower()
-        is_p = low.isin(pct).to_numpy()
-        if is_p.sum() == 0:  # substring fallback
-            is_p = np.array([any(t in c or c in t for t in pct) for c in low])
-        if is_p.sum() == 0:
-            raise RuntimeError(f"No cells matched {pct}; available: {sorted(ctl.unique())[:20]}")
-        dis.obs["radar_pop"] = np.where(is_p, "P", "B")
-        p_labels = sorted(ctl[is_p].unique())
-        lab_in = "[" + ", ".join(f"'{c}'" for c in p_labels) + "]"
-        parts = [dis]
-        # 2) healthy counterpart (same cell types, disease == normal) — may be empty (cancer)
+        # resolve the target cell-type labels actually present for this disease (cheap obs read),
+        # so the pathogenic population is fetched directly and is well-sampled even when it is
+        # a minority of the tissue (e.g. fibroblasts in lung).
+        obs = census["census_data"]["homo_sapiens"].obs
+        avail = obs.read(value_filter=f"disease == '{disease}'{tis}",
+                         column_names=["cell_type"]).concat().to_pandas()["cell_type"].astype(str)
+        uniq = sorted(avail.unique())
+        resolved = [c for c in uniq if c.lower() in pct
+                    or any(t in c.lower() or c.lower() in t for t in pct)]
+        if not resolved:
+            raise RuntimeError(f"No cell types matched {pct}; available: {uniq[:25]}")
+        lab_in = "[" + ", ".join(f"'{c}'" for c in resolved) + "]"
+        p_labels = resolved
+        print(f"[resolve] pathogenic cell types: {resolved}")
+
+        # P: dedicated fetch of the target cell type in the disease (well-sampled)
+        p = _fetch_pop(census, f"disease == '{disease}' and cell_type in {lab_in}{tis}",
+                       "P", max_cells_per_pop, rng)
+        if p is None:
+            raise RuntimeError(f"No pathogenic cells for {disease} / {resolved}")
+        parts = [p]
+        # B: bystander cell types in the diseased tissue (cell-type specificity + UMAP context)
+        b = _fetch_pop(census, f"disease == '{disease}'{tis}", "B", max_cells_per_pop, rng)
+        if b is not None:
+            b = b[~b.obs["cell_type"].astype(str).isin(resolved)].copy()
+            if b.n_obs > 0:
+                parts.append(b)
+        # H: healthy counterpart (same cell types, disease == normal) — may be empty (cancer)
         parts.append(_fetch_pop(census, f"disease == 'normal' and cell_type in {lab_in}{tis}",
                                 "H", max_cells_per_pop, rng))
-        # 3) related diseases (same cell types)
+        # R: related diseases (same cell types)
         for rd in related:
             parts.append(_fetch_pop(census, f"disease == '{rd}' and cell_type in {lab_in}",
                                     f"R::{rd}", max_cells_per_pop, rng))
 
-    parts = [x for x in parts if x is not None]
+    parts = [x for x in parts if x is not None and x.n_obs > 0]
     adata = ad.concat(parts, join="inner", merge="same")
     adata.obs_names_make_unique()
 
-    raw = adata.X.copy()                            # raw counts for DE
+    adata.layers["counts"] = adata.X.copy()         # raw counts (carried for DE)
     sc.pp.normalize_total(adata, target_sum=1e4)    # linear CP10k for scoring
 
     pop_detail = adata.obs["radar_pop"].astype(str).to_numpy()
@@ -337,46 +349,52 @@ def build_and_score(
             sc.tl.leiden(subad, resolution=subcluster_resolution)
         clusters = subad.obs["leiden"].to_numpy()
         is_dis = (pop[mask_pt] == "P").astype(float)
+        baseline = float(is_dis.mean())
         grp = pd.Series(is_dis).groupby(clusters)
         dfrac, csize = grp.mean(), grp.size()
-        elig = dfrac[csize >= 30]
+        # a genuine pathogenic state must be enriched above the disease baseline AND sizeable
+        elig = dfrac[(csize >= 30) & (dfrac > max(1.5 * baseline, baseline + 0.05))]
+        idx_pt = np.where(mask_pt)[0]
         if len(elig):
             path_cluster = elig.idxmax()
-            idx_pt = np.where(mask_pt)[0]
-            reassign = idx_pt[(pop[idx_pt] == "P") & (clusters != path_cluster)]
-            pop = pop.copy()
-            pop[reassign] = "B"  # disease cells in non-pathogenic states -> bystander
-            pop_detail = pop.copy()
-            subpop_info = {"path_cluster": str(path_cluster),
-                           "disease_frac": float(dfrac[path_cluster]),
-                           "n_clusters": int(csize.size), "n_P_after": int((pop == "P").sum())}
-            print(f"[subpop] cluster {path_cluster}: disease_frac={dfrac[path_cluster]:.2f}, "
-                  f"P={subpop_info['n_P_after']} state cells (of {int(mask_pt.sum())} {pct})")
+            n_after = int(((pop[idx_pt] == "P") & (clusters == path_cluster)).sum())
+            if n_after >= 20:
+                reassign = idx_pt[(pop[idx_pt] == "P") & (clusters != path_cluster)]
+                pop = pop.copy()
+                pop[reassign] = "B"  # disease cells in non-pathogenic states -> bystander
+                pop_detail = pop.copy()
+                subpop_info = {"path_cluster": str(path_cluster), "disease_frac": float(dfrac[path_cluster]),
+                               "baseline_frac": baseline, "n_clusters": int(csize.size), "n_P_after": n_after}
+                print(f"[subpop] cluster {path_cluster}: disease_frac={dfrac[path_cluster]:.2f} "
+                      f"(baseline {baseline:.2f}), P={n_after} state cells")
+            else:
+                print(f"[subpop] enriched cluster too small (n={n_after}); keeping whole-cell-type P")
         else:
-            print("[subpop] no eligible cluster; keeping whole-cell-type P")
+            print(f"[subpop] no disease-enriched cluster (baseline {baseline:.2f}); keeping whole-cell-type P")
 
     # candidate genes: detected in >= min_detect_frac of pathogenic cells
     Xp = adata[pop == "P"].X
     detect = np.asarray((Xp > 0).mean(axis=0)).ravel()
     keep = np.where(detect >= min_detect_frac)[0]
-    genes = genes_all[keep]
-    n_before = len(genes)
+    n_before = len(keep)
     if exclude_technical:
-        m = filter_technical(genes)
+        m = filter_technical(genes_all[keep])
         print(f"[filter] dropped {int((~m).sum())}/{n_before} technical genes")
         keep = keep[m]
-        genes = genes[m]
 
-    Xc = adata[:, keep].X
-    Xc = np.asarray(Xc.todense()) if hasattr(Xc, "todense") else np.asarray(Xc)
+    # a single candidate-gene subset drives BOTH scoring and DE (aligned shapes)
+    sub = adata[:, keep]
+    genes = (sub.var["feature_name"] if "feature_name" in sub.var else sub.var_names).to_numpy().astype(str)
+    Xc = np.asarray(sub.X.todense()) if hasattr(sub.X, "todense") else np.asarray(sub.X)
     df = score_matrix(Xc, genes, donor, pop, pos_label="P")
 
     # donor-level DE: P vs primary reference (healthy if present, else bystander)
     ref = "H" if (pop == "H").any() else "B"
     de = None
     try:
-        raw_c = np.asarray(raw[:, keep].todense()) if hasattr(raw, "todense") else np.asarray(raw[:, keep])
-        de = pseudobulk_de(raw_c, donor, pop, genes, pos_label="P", neg_labels=[ref])
+        rc = sub.layers["counts"]
+        rc = np.asarray(rc.todense()) if hasattr(rc, "todense") else np.asarray(rc)
+        de = pseudobulk_de(rc, donor, pop, genes, pos_label="P", neg_labels=[ref])
         de.to_parquet(f"{DATA}/{out_name}_de.parquet")
     except Exception as e:
         print(f"[de] skipped: {type(e).__name__}: {e}")
