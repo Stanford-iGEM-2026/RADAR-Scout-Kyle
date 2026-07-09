@@ -350,7 +350,11 @@ def score_matrix(expr2d, gene_names, donor, pop, pos_label="P", neg_labels=None,
                "k_op": k_op, "Youden_J": jstat, "n_donors": n_pos_donors,
                "act_P": feas, "mean_P": mean_P, "median_P": median_P, "detect_P": detect_P,
                "cv_P": cv_P, "dynrange": dynrange, "pct_don_P": pct_don_P,
-               "log2FC": log2fc, "p_value": pval}
+               "log2FC": log2fc, "p_value": pval,
+               # Disease Specificity Score (reference-style: high transcription x high
+               # fold-change) — surfaces disease-associated markers of the pathogenic pop.
+               "DSS": (float(max(log2fc, 0.0) * np.log10(mean_P + 1.0))
+                       if pmeans.size and np.isfinite(log2fc) and np.isfinite(mean_P) else np.nan)}
         for p, (m, d, a) in per_pop_stats.items():
             row[f"act_{p}"] = float(a.mean())
             row[f"mean_{p}"] = float(m.mean())

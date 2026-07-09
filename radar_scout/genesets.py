@@ -24,6 +24,7 @@ import numpy as np
 _TECH_REGEX = re.compile(
     r"^(RPL|RPS|RPLP|MRPL|MRPS|FAU|"        # ribosomal
     r"MT-|MTRNR|MTND|MTCO|MTATP|MT[0-9]|"    # mitochondrial
+    r"ATP5[A-Z0-9]|ATP6[A-Z0-9]|"            # ATP synthase / V-ATPase (housekeeping)
     r"HSP[AB0-9]|DNAJ|"                       # heat-shock / chaperone
     r"SNOR|SCARNA|MIR[0-9]|"                  # small ncRNA
     r"LINC[0-9]|"                             # long intergenic ncRNA
@@ -31,6 +32,16 @@ _TECH_REGEX = re.compile(
     r"RP11-|RP4-|RP5-|AC[0-9]{6}|AL[0-9]{6}|AP00|CTD-|CTC-|CTA-)",  # clone names
     re.IGNORECASE,
 )
+
+# ubiquitous housekeeping genes (translation, cytoskeleton, ubiquitin, iron) — never
+# disease-specific RADAR targets. Deliberately excludes myofibroblast/ECM genes
+# (ACTA2, TAGLN, TPM1/2, the collagens) which ARE keloid/fibrosis-relevant.
+_HOUSEKEEPING = {
+    "EEF1A1", "EEF1A2", "EEF1B2", "EEF1D", "EEF1G", "EEF2", "EIF1", "TPT1", "NAP1L1",
+    "PTMA", "PTMS", "TMSB4X", "TMSB10", "FTL", "FTH1", "UBB", "UBA52", "UBC", "B2M",
+    "ACTB", "ACTG1", "GAPDH", "PGK1", "PPIA", "YWHAZ", "HNRNPA1", "PABPC1", "NACA",
+    "SERF2", "SEC61B", "SLIRP", "GSTP1", "CALM1", "CALM2",
+}
 
 # X-inactivation + chromosome-Y genes (sex confounders)
 _SEX = {
@@ -50,7 +61,7 @@ _IEG_DISSOC = {
     "HSPA1B", "BAG3", "UBC", "SGK1", "MCL1", "ID1", "ID3",
 }
 
-_BLACKLIST = _SEX | _NUCLEAR_LNC | _IEG_DISSOC
+_BLACKLIST = _SEX | _NUCLEAR_LNC | _IEG_DISSOC | _HOUSEKEEPING
 
 
 def is_technical(gene: str) -> bool:
