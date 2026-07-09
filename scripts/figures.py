@@ -120,24 +120,49 @@ def fig_window(df, outdir, n=12):
 
 
 def fig_volcano(de, outdir, fdr_thr=0.05, lfc_thr=1.0, label_top=15):
-    """Volcano of donor-level differential expression (log2FC vs -log10 FDR)."""
-    d = de.copy()
-    q = d["FDR"].clip(lower=1e-300)
-    d["nlq"] = -np.log10(q)
-    sig = (d["FDR"] < fdr_thr) & (d["log2FC"].abs() > lfc_thr)
+    """Volcano of donor-level DE (log2FC vs -log10 FDR).
+
+    Falls back to a fold-change-vs-abundance view when donor-level significance is
+    underpowered (few donors in a small pathogenic subpopulation → all-NaN p/FDR),
+    so the figure is never empty and stays honest about what's estimable.
+    """
+    d = de[de["log2FC"].notna()].copy()
+    ycol = next((c for c in ["FDR", "p_value", "p_mannwhitney"]
+                 if c in d and d[c].notna().sum() > 0), None)
     fig, ax = plt.subplots(figsize=(5.0, 4.6))
-    ax.scatter(d.loc[~sig, "log2FC"], d.loc[~sig, "nlq"], s=8, color="#cccccc", alpha=0.6, linewidth=0)
-    up = sig & (d["log2FC"] > 0)
-    ax.scatter(d.loc[up, "log2FC"], d.loc[up, "nlq"], s=12, color=CRIMSON, linewidth=0, label="up in pathogenic")
-    ax.scatter(d.loc[sig & ~up, "log2FC"], d.loc[sig & ~up, "nlq"], s=12, color=TEAL, linewidth=0)
-    ax.axhline(-np.log10(fdr_thr), color="#999", lw=0.8, ls="--")
-    ax.axvline(lfc_thr, color="#999", lw=0.8, ls="--")
-    ax.axvline(-lfc_thr, color="#999", lw=0.8, ls="--")
-    for _, r in d[up].nlargest(label_top, "nlq").iterrows():
-        ax.annotate(r["gene"], (r["log2FC"], r["nlq"]), fontsize=7, fontstyle="italic",
-                    xytext=(2, 2), textcoords="offset points", color="#333")
-    ax.set_xlabel("log2 fold-change (pathogenic vs reference)")
-    ax.set_ylabel("-log10 FDR")
+
+    if ycol is None:  # underpowered — MA-style fallback
+        mcol = "mean_pos" if "mean_pos" in d else ("mean_P" if "mean_P" in d else None)
+        x = np.log10((d[mcol] if mcol else 1.0) + 1)
+        big = d["log2FC"].abs() > lfc_thr
+        ax.scatter(x[~big], d["log2FC"][~big], s=8, color="#cccccc", alpha=0.6, linewidth=0)
+        ax.scatter(x[big & (d.log2FC > 0)], d.log2FC[big & (d.log2FC > 0)], s=12, color=CRIMSON, linewidth=0)
+        ax.scatter(x[big & (d.log2FC < 0)], d.log2FC[big & (d.log2FC < 0)], s=12, color=TEAL, linewidth=0)
+        for _, r in d.reindex(d["log2FC"].abs().sort_values(ascending=False).index).head(label_top).iterrows():
+            ax.annotate(r["gene"], (np.log10((r[mcol] if mcol else 1) + 1), r["log2FC"]),
+                        fontsize=7, fontstyle="italic", xytext=(2, 2), textcoords="offset points", color="#333")
+        ax.axhline(lfc_thr, color="#999", lw=0.8, ls="--")
+        ax.axhline(-lfc_thr, color="#999", lw=0.8, ls="--")
+        ax.set_xlabel("log10 mean expression (pathogenic)")
+        ax.set_ylabel("log2 fold-change vs reference")
+        ax.set_title("fold-change vs abundance (donor-level significance underpowered)",
+                     fontsize=8, color="#666")
+    else:
+        d["nlq"] = -np.log10(d[ycol].clip(lower=1e-300))
+        d = d[d["nlq"].notna()]
+        sig = (d[ycol] < fdr_thr) & (d["log2FC"].abs() > lfc_thr)
+        up = sig & (d["log2FC"] > 0)
+        ax.scatter(d.loc[~sig, "log2FC"], d.loc[~sig, "nlq"], s=8, color="#cccccc", alpha=0.6, linewidth=0)
+        ax.scatter(d.loc[up, "log2FC"], d.loc[up, "nlq"], s=12, color=CRIMSON, linewidth=0)
+        ax.scatter(d.loc[sig & ~up, "log2FC"], d.loc[sig & ~up, "nlq"], s=12, color=TEAL, linewidth=0)
+        ax.axhline(-np.log10(fdr_thr), color="#999", lw=0.8, ls="--")
+        ax.axvline(lfc_thr, color="#999", lw=0.8, ls="--")
+        ax.axvline(-lfc_thr, color="#999", lw=0.8, ls="--")
+        for _, r in d[up].nlargest(label_top, "nlq").iterrows():
+            ax.annotate(r["gene"], (r["log2FC"], r["nlq"]), fontsize=7, fontstyle="italic",
+                        xytext=(2, 2), textcoords="offset points", color="#333")
+        ax.set_xlabel("log2 fold-change (pathogenic vs reference)")
+        ax.set_ylabel(f"-log10 {ycol}")
     fig.tight_layout()
     fig.savefig(Path(outdir) / "fig_volcano.png", bbox_inches="tight")
     plt.close(fig)
