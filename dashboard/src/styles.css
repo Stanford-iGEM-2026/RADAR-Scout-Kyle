@@ -804,3 +804,82 @@ table.compare-table tbody tr:hover { background: var(--bg-faint); }
   text-align: right;
   font-weight: 600;
 }
+
+/* ------------------------------------------------------------------ cohort strip (header) */
+.cohort-strip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.cohort-strip .cohort-lead {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.cohort-pill {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 1px;
+  border: 1px solid var(--border-strong);
+  border-left: 2px solid var(--teal);
+  border-radius: var(--radius);
+  padding: 5px 11px;
+  background: var(--bg-faint);
+}
+
+.cohort-pill .cohort-ct {
+  font-size: 10.5px;
+  color: var(--muted);
+  text-transform: capitalize;
+}
+
+/* ------------------------------------------------------------------ reproducibility bars (detail) */
+.repro-card { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+
+.repro-body { padding: 14px 16px 4px; }
+
+.repro-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 200px) 1fr 48px;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 0;
+}
+
+.repro-label {
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.repro-track {
+  height: 8px;
+  background: var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.repro-fill {
+  display: block;
+  height: 100%;
+  background: var(--teal);
+  border-radius: 4px;
+}
+
+.repro-val {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  font-size: 12.5px;
+  color: var(--teal);
+  text-align: right;
+}

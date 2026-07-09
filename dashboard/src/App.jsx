@@ -24,10 +24,10 @@ export default function App() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
-  // view state
-  const [rankMetric, setRankMetric] = useState('RACS') // 'RACS' | 'DSS'
+  // view state — pooled consensus ranking is the default lens
+  const [rankMetric, setRankMetric] = useState('pooled_score')
   const [query, setQuery] = useState('')
-  const [sortKey, setSortKey] = useState('RACS')
+  const [sortKey, setSortKey] = useState('pooled_score')
   const [sortDir, setSortDir] = useState('desc')
   const [filters, setFilters] = useState(BASE_FILTERS)
   const [selected, setSelected] = useState(null)
@@ -75,9 +75,11 @@ export default function App() {
         return r.json()
       }),
     ]
+    // The pooled key has no umap of its own — fetch the disease's umap_key file.
+    const umapKey = info.has_umap && info.umap_key ? info.umap_key : null
     jobs.push(
-      info.has_umap
-        ? fetch(`${base}data/${info.key}_umap.json`)
+      umapKey
+        ? fetch(`${base}data/${umapKey}_umap.json`)
             .then((r) => (r.ok ? r.json() : null))
             .catch(() => null)
         : Promise.resolve(null),
@@ -103,20 +105,22 @@ export default function App() {
     }
   }, [info])
 
-  // is DSS available for this disease?
-  const hasDSS = useMemo(() => hasCol(genes, 'DSS'), [genes])
   const hasFDR = useMemo(() => hasCol(genes, 'FDR'), [genes])
   const isKeloid = info?.disease === 'keloid'
 
-  // if a disease has no DSS, force the RACS view
+  // if the active rank metric isn't available for this disease, fall back to
+  // the pooled score (always present in the pooled files).
   useEffect(() => {
-    if (rankMetric !== 'RACS' && !hasCol(genes, rankMetric)) setRankMetric('RACS')
-  }, [genes, hasDSS, rankMetric])
+    if (genes && rankMetric !== 'pooled_score' && !hasCol(genes, rankMetric)) {
+      setRankMetric('pooled_score')
+    }
+  }, [genes, rankMetric])
 
-  // keep the display sort valid when switching diseases (e.g. DSS column gone)
+  // keep the display sort valid when switching diseases (a metric column may
+  // vanish, e.g. DSS/Repro absent for some cohorts).
   useEffect(() => {
-    if (sortKey === 'DSS' && !hasDSS) setSortKey('RACS')
-  }, [hasDSS, sortKey])
+    if (genes && sortKey && !hasCol(genes, sortKey)) setSortKey(rankMetric)
+  }, [genes, sortKey, rankMetric])
 
   // when the rank metric changes, default the display sort to match it
   useEffect(() => {
@@ -145,15 +149,19 @@ export default function App() {
   // ---- filter + search + sort --------------------------------------------- //
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
+    // Component metrics may be absent for some cohorts (e.g. Repro in PF); treat
+    // a missing value as "passes" so the default (0) filters never hide genes.
+    const geq = (v, t) => v === undefined || v === null || v >= t
+    const leq = (v, t) => v === undefined || v === null || v <= t
     let out = ranked.filter(
       (g) =>
-        g.RACS >= filters.RACS &&
-        g.Feas >= filters.Feas &&
-        g.Sep >= filters.Sep &&
-        g.Repro >= filters.Repro &&
-        g.OffMax <= filters.OffMax &&
-        (g.detect_P ?? Infinity) >= filters.detect_P &&
-        (g.log2FC ?? Infinity) >= filters.log2FC,
+        geq(g.RACS, filters.RACS) &&
+        geq(g.Feas, filters.Feas) &&
+        geq(g.Sep, filters.Sep) &&
+        geq(g.Repro, filters.Repro) &&
+        leq(g.OffMax, filters.OffMax) &&
+        geq(g.detect_P, filters.detect_P) &&
+        geq(g.log2FC, filters.log2FC),
     )
     if (q) out = out.filter((g) => g.gene.toLowerCase().includes(q))
     const dir = sortDir === 'desc' ? -1 : 1
@@ -199,6 +207,12 @@ export default function App() {
     if (!umap || !umap.length) return []
     return Object.keys(umap[0]).filter((k) => !UMAP_META_KEYS.has(k))
   }, [umap])
+
+  // the cohort whose single-cell data backs the umap (for the panel label)
+  const umapCohort = useMemo(
+    () => info?.cohorts?.find((c) => c.key === info.umap_key) || null,
+    [info],
+  )
 
   // keep selection valid when filters hide the current gene
   useEffect(() => {
@@ -288,15 +302,15 @@ export default function App() {
           <strong style={{ color: RANK_METRICS[rankMetric].color }}>
             {RANK_METRICS[rankMetric].long}
           </strong>{' '}
-          — surfacing {RANK_METRICS[rankMetric].blurb}
-          {rankMetric === 'DSS'
-            ? ' (high fold-change × abundance).'
-            : ' (specific, abundant, reproducible, low off-target).'}
+          — surfacing {RANK_METRICS[rankMetric].blurb}.
         </span>
       </div>
 
       {loading ? (
-        <div className="loading">Loading {info?.disease} · {info?.cohort}…</div>
+        <div className="loading">
+          Loading {info?.disease}
+          {info?.n_cohorts ? ` · ${info.n_cohorts} cohort${info.n_cohorts > 1 ? 's' : ''}` : ''}…
+        </div>
       ) : (
         <>
           <div className="main-grid">
@@ -314,7 +328,6 @@ export default function App() {
                 compareIds={compareIds}
                 onToggleCompare={toggleCompare}
                 compareEnabled={compareOpen}
-                hasDSS={hasDSS}
               />
               <Filters
                 filters={filters}
@@ -367,7 +380,12 @@ export default function App() {
                       </button>
                     </div>
                   ) : null}
-                  <DetailPanel gene={selectedGene} allGenes={ranked} rank={selectedGene?._rank} />
+                  <DetailPanel
+                    gene={selectedGene}
+                    allGenes={ranked}
+                    rank={selectedGene?._rank}
+                    cohorts={info?.cohorts || []}
+                  />
                 </>
               )}
             </div>
@@ -392,11 +410,11 @@ export default function App() {
               </div>
             ) : null}
 
-            {info?.has_umap && umap && umap.length ? (
+            {info?.has_umap && info?.umap_key && umap && umap.length ? (
               <div className="panel viz-panel">
                 <div className="panel-head">
                   <h2>Cell embedding</h2>
-                  <span className="hint">{info.cell_type} · {info.cohort}</span>
+                  <span className="hint">{umapCohort?.cell_type ?? info.disease} · {umapCohort?.cohort ?? 'single-cell atlas'}</span>
                 </div>
                 <div className="panel-body">
                   <UmapPanel points={umap} geneCols={umapGeneCols} selectedGene={selected} />
@@ -413,9 +431,10 @@ export default function App() {
 
       <footer style={{ marginTop: 40, paddingTop: 16, borderTop: '1px solid var(--border)' }}>
         <span className="muted" style={{ fontSize: 12 }}>
-          RADAR-Scout · {info?.disease ?? '—'} · {info?.cell_type ?? ''} · {info?.cohort ?? ''} —
-          scores follow docs/RACS_framework.md. RACS = RADAR compatibility; DSS = disease
-          specificity.
+          RADAR-Scout · {info?.disease ?? '—'}
+          {info?.n_cohorts ? ` · pooled across ${info.n_cohorts} cohort${info.n_cohorts > 1 ? 's' : ''}` : ''} —
+          scores follow docs/RACS_framework.md. Pooled = cross-cohort consensus; RACS = RADAR
+          compatibility; DSS = disease specificity; Sensor = detection specificity.
         </span>
       </footer>
     </div>

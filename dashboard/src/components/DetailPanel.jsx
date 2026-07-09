@@ -79,26 +79,37 @@ function ScatterTooltip({ active, payload }) {
 
 const Swatch = ({ color }) => <span className="swatch" style={{ background: color }} />
 
-export default function DetailPanel({ gene, allGenes, rank }) {
+export default function DetailPanel({ gene, allGenes, rank, cohorts = [] }) {
   if (!gene) {
     return (
       <div className="detail-empty">
-        <p style={{ margin: 0, fontSize: 15 }}>Select a gene to inspect its RACS profile.</p>
+        <p style={{ margin: 0, fontSize: 15 }}>Select a gene to inspect its target profile.</p>
         <p className="muted" style={{ marginTop: 8, fontSize: 13 }}>
-          Breakdown, therapeutic-window activation, and the abundance–specificity sweet spot.
+          Cross-cohort reproducibility, RACS breakdown, therapeutic-window activation, and the
+          abundance–specificity sweet spot.
         </p>
       </div>
     )
   }
 
-  // (a) RACS breakdown: the four multiplicative factors, RACS highlighted.
+  // (a) RACS breakdown: the multiplicative factors present for this disease,
+  // RACS highlighted. Repro is absent for some cohorts — omit it there.
   const breakdown = [
     { name: 'Sep', value: gene.Sep, kind: 'comp' },
     { name: 'Feas', value: gene.Feas, kind: 'comp' },
     { name: 'Repro', value: gene.Repro, kind: 'comp' },
-    { name: '1 − OffMax', value: 1 - gene.OffMax, kind: 'comp' },
+    { name: '1 − OffMax', value: gene.OffMax != null ? 1 - gene.OffMax : undefined, kind: 'comp' },
     { name: 'RACS', value: gene.RACS, kind: 'racs' },
-  ]
+  ].filter((b) => b.value !== undefined && b.value !== null)
+
+  // per-cohort reproducibility: percentile rank of this gene in each pooled cohort
+  const perCohort = gene.per_cohort && typeof gene.per_cohort === 'object' ? gene.per_cohort : null
+  const cohortLabel = (key) => cohorts.find((c) => c.key === key)?.cohort || key
+  const reproRows = perCohort
+    ? Object.entries(perCohort)
+        .map(([key, pct]) => ({ key, label: cohortLabel(key), pct }))
+        .sort((a, b) => b.pct - a.pct)
+    : []
 
   // (b) per-population activation (therapeutic window). Only the off-target
   // populations actually present in this disease are shown.
@@ -138,9 +149,14 @@ export default function DetailPanel({ gene, allGenes, rank }) {
   // (e) extended metric table — expose the fuller metric set, skipping any
   // columns this disease doesn't carry.
   const metricRows = [
+    { k: 'pooled_score', label: 'Pooled score', v: gene.pooled_score, d: 1 },
+    { k: 'consensus_pct', label: 'Consensus percentile', v: gene.consensus_pct, d: 1 },
+    { k: 'spec_score', label: 'Sensor (detection specificity)', v: gene.spec_score, d: 2 },
     { k: 'DSS', label: 'DSS (disease specificity)', v: gene.DSS, d: 2 },
     { k: 'log2FC', label: 'log2 fold-change', v: gene.log2FC, d: 2 },
     { k: 'detect_P', label: 'Detection in pathogenic (%)', v: gene.detect_P, d: 1 },
+    { k: 'detect_H', label: 'Detection in healthy (%)', v: gene.detect_H, d: 1 },
+    { k: 'delta_detect', label: 'Δ detection (P − H, %)', v: gene.delta_detect, d: 1 },
     { k: 'mean_P', label: 'Mean expr (pathogenic)', v: gene.mean_P, d: 2 },
     { k: 'dynrange', label: 'Dynamic range', v: gene.dynrange, d: 2 },
     { k: 'cv_P', label: 'CV (pathogenic)', v: gene.cv_P, d: 2 },
@@ -155,32 +171,69 @@ export default function DetailPanel({ gene, allGenes, rank }) {
         <div className="detail-title">
           <h2>{gene.gene}</h2>
           <div className="detail-racs">
-            <span className="num">{fmt(gene.RACS, 3)}</span>
-            <span className="cap">RACS</span>
+            <span className="num">
+              {gene.pooled_score != null ? fmt(gene.pooled_score, 1) : fmt(gene.RACS, 3)}
+            </span>
+            <span className="cap">{gene.pooled_score != null ? 'Pooled' : 'RACS'}</span>
           </div>
           <span className="rank-badge">rank #{rank}</span>
         </div>
         <div className="kv-strip">
-          {gene.DSS !== undefined && gene.DSS !== null ? (
+          {gene.consensus_pct != null ? (
+            <div className="kv">
+              <span className="k">Consensus</span>
+              <span className="v">{fmt(gene.consensus_pct, 1)}</span>
+            </div>
+          ) : null}
+          {gene.RACS != null ? (
+            <div className="kv">
+              <span className="k">RACS</span>
+              <span className="v" style={{ color: COLORS.crimson }}>{fmt(gene.RACS, 3)}</span>
+            </div>
+          ) : null}
+          {gene.DSS != null ? (
             <div className="kv">
               <span className="k">DSS</span>
               <span className="v" style={{ color: COLORS.teal }}>{fmt(gene.DSS, 2)}</span>
             </div>
           ) : null}
-          <div className="kv">
-            <span className="k">k_op</span>
-            <span className="v">{fmt(gene.k_op, 1)}</span>
-          </div>
-          <div className="kv">
-            <span className="k">Youden J</span>
-            <span className="v">{fmt(gene.Youden_J, 2)}</span>
-          </div>
-          <div className="kv">
-            <span className="k">Donors</span>
-            <span className="v">{gene.n_donors}</span>
-          </div>
+          {gene.n_cohorts != null ? (
+            <div className="kv">
+              <span className="k">Cohorts</span>
+              <span className="v">{gene.n_cohorts}</span>
+            </div>
+          ) : null}
         </div>
       </div>
+
+      {reproRows.length ? (
+        <div className="chart-card full repro-card" style={{ marginTop: 20 }}>
+          <div className="chart-head">
+            <h3>
+              Reproducibility across cohorts
+              <span className="sub">  percentile rank of {gene.gene} in each pooled cohort</span>
+            </h3>
+          </div>
+          <div className="repro-body">
+            {reproRows.map((r) => (
+              <div className="repro-row" key={r.key}>
+                <span className="repro-label" title={r.label}>{r.label}</span>
+                <span className="repro-track">
+                  <span
+                    className="repro-fill"
+                    style={{ width: `${Math.max(1, r.pct)}%` }}
+                  />
+                </span>
+                <span className="repro-val">{fmt(r.pct, 1)}</span>
+              </div>
+            ))}
+          </div>
+          <div className="chart-note">
+            High bars in every cohort mean the target is a robust consensus hit, not a
+            single-dataset artefact. Percentiles are the gene's expression rank within each cohort.
+          </div>
+        </div>
+      ) : null}
 
       <div className="charts-grid">
         {/* (a) RACS breakdown */}

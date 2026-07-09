@@ -1,8 +1,20 @@
 import { COMPONENTS, RANK_METRICS, fmt } from '../lib/utils'
 
+// Candidate sort columns, in display order. Only those present in the loaded
+// records are shown as chips (diseases carry different metric subsets).
+const SORT_CANDIDATES = [
+  { key: 'pooled_score', label: 'Pooled' },
+  { key: 'consensus_pct', label: 'Consensus' },
+  { key: 'DSS', label: 'DSS' },
+  { key: 'spec_score', label: 'Sensor' },
+  ...COMPONENTS.filter((c) => c.key !== 'RACS'),
+  { key: 'RACS', label: 'RACS' },
+]
+
 // Left ranked list. Rows show rank, italic gene name, a slim bar for the active
 // rank metric, and its numeric value. The bar/value follow whichever metric is
-// active (RACS crimson, DSS teal). Sortable by any column; clicking selects.
+// active (crimson for pooled/RACS, teal for DSS). Sortable by any present
+// column; clicking selects.
 export default function GeneList({
   genes,
   maxMetric,
@@ -15,11 +27,12 @@ export default function GeneList({
   compareIds,
   onToggleCompare,
   compareEnabled,
-  hasDSS,
 }) {
   const rm = RANK_METRICS[rankMetric]
-  // Sort chips: the RACS components, plus DSS when the disease exposes it.
-  const sortChips = hasDSS ? [...COMPONENTS, { key: 'DSS', label: 'DSS' }] : COMPONENTS
+  const probe = genes[0]
+  const sortChips = probe
+    ? SORT_CANDIDATES.filter((c) => probe[c.key] !== undefined && probe[c.key] !== null)
+    : SORT_CANDIDATES
 
   return (
     <div className="panel">

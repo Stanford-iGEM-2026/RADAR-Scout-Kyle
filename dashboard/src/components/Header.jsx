@@ -1,5 +1,6 @@
-// Slim top header: title, disease/cohort selector (from diseases.json),
-// gene search, and a stats strip driven by the selected disease's manifest entry.
+// Slim top header: title, disease selector (one option per disease, pooled),
+// gene search, a stats strip, and a compact list of the pooled cohorts so users
+// can see what went into the consensus ranking.
 export default function Header({
   diseases,
   activeKey,
@@ -12,10 +13,11 @@ export default function Header({
   loading,
 }) {
   const donors = info?.n_donors || {}
-  const subpop = info?.subpop && Object.keys(info.subpop).length ? info.subpop : null
+  const cohorts = info?.cohorts || []
 
-  // Human label for each manifest entry in the switcher.
-  const optLabel = (d) => `${d.disease} · ${d.cell_type} · ${d.cohort}`
+  // One option per disease: the disease name, plus a cohort count when >1.
+  const optLabel = (d) =>
+    d.n_cohorts > 1 ? `${d.disease} · ${d.n_cohorts} cohorts` : d.disease
 
   return (
     <header className="header">
@@ -24,16 +26,16 @@ export default function Header({
           <h1>
             RADAR<span className="accent">·</span>Scout
           </h1>
-          <span className="tagline">RNA target prioritization by RACS</span>
+          <span className="tagline">pooled RNA target consensus</span>
         </div>
         <div className="controls">
           <div className="control">
-            <label htmlFor="sel-disease">Disease · cohort</label>
+            <label htmlFor="sel-disease">Disease</label>
             <select
               id="sel-disease"
               value={activeKey}
               onChange={(e) => setActiveKey(e.target.value)}
-              style={{ minWidth: 280 }}
+              style={{ minWidth: 220, textTransform: 'capitalize' }}
             >
               {diseases.map((d) => (
                 <option key={d.key} value={d.key}>
@@ -59,11 +61,21 @@ export default function Header({
 
       <div className="stats-strip">
         <div className="stat">
+          <span className="value" style={{ textTransform: 'capitalize' }}>
+            {info?.disease ?? '—'}
+          </span>
+          <span className="label">Disease</span>
+        </div>
+        <div className="stat">
+          <span className="value">{info?.n_cohorts ?? '—'}</span>
+          <span className="label">Cohorts pooled</span>
+        </div>
+        <div className="stat">
           <span className="value">
             {loading ? '…' : nCandidates}
             {!loading && nCandidates !== nTotal ? <span className="sub"> / {nTotal}</span> : null}
           </span>
-          <span className="label">Genes scored</span>
+          <span className="label">Genes ranked</span>
         </div>
         <div className="stat">
           <span className="value">{donors.P ?? '—'}</span>
@@ -77,30 +89,19 @@ export default function Header({
           <span className="value">{donors.B ?? '—'}</span>
           <span className="label">Donors · background</span>
         </div>
-        <div className="stat">
-          <span className="value" style={{ textTransform: 'capitalize' }}>
-            {info?.cell_type ?? '—'}
-          </span>
-          <span className="label">Cell type</span>
-        </div>
-        <div className="stat">
-          <span className="value" style={{ fontSize: 13, fontWeight: 500 }}>
-            {info?.cohort ?? '—'}
-          </span>
-          <span className="label">Cohort</span>
-        </div>
-        {subpop ? (
-          <div className="stat">
-            <span className="value" style={{ fontSize: 13, fontWeight: 600, color: 'var(--crimson)' }}>
-              cluster {subpop.path_cluster}
-            </span>
-            <span className="label">
-              pathogenic subpopulation
-              {subpop.n_P_after != null ? ` · ${subpop.n_P_after} cells` : ''}
-            </span>
-          </div>
-        ) : null}
       </div>
+
+      {cohorts.length ? (
+        <div className="cohort-strip">
+          <span className="cohort-lead">Pooled from</span>
+          {cohorts.map((c) => (
+            <span className="cohort-pill" key={c.key} title={c.cell_type}>
+              {c.cohort}
+              <span className="cohort-ct">{c.cell_type}</span>
+            </span>
+          ))}
+        </div>
+      ) : null}
     </header>
   )
 }
