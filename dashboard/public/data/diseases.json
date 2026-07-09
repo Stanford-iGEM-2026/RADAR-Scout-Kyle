@@ -3,7 +3,7 @@
     {
       "disease": "keloid",
       "key": "keloid_pooled",
-      "n_genes": 10807,
+      "n_genes": 10805,
       "n_cohorts": 3,
       "n_donors": {
         "B": 4,
