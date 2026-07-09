@@ -289,8 +289,10 @@ def build_and_score(
         avail = obs.read(value_filter=f"disease == '{disease}'{tis}",
                          column_names=["cell_type"]).concat().to_pandas()["cell_type"].astype(str)
         uniq = sorted(avail.unique())
-        resolved = [c for c in uniq if c.lower() in pct
-                    or any(t in c.lower() or c.lower() in t for t in pct)]
+        # exact match, else the requested term is contained in a more specific label
+        # (e.g. "fibroblast" -> "alveolar fibroblast"). Only the query-in-candidate
+        # direction — the reverse wrongly matched "T cell" inside "malignan-t cell".
+        resolved = [c for c in uniq if c.lower() in pct or any(t in c.lower() for t in pct)]
         if not resolved:
             raise RuntimeError(f"No cell types matched {pct}; available: {uniq[:25]}")
         lab_in = "[" + ", ".join(f"'{c}'" for c in resolved) + "]"
