@@ -312,6 +312,45 @@ def fig_forest(umap, outdir, gene=None):
     plt.close(fig)
 
 
+def fig_manhattan(gwas_csv, racs_df, outdir, n_targets=600):
+    """Manhattan-style plot of disease GWAS associations, highlighting genes that are
+    also top RADAR targets. ANNOTATION ONLY — GWAS never influences prioritization
+    (per spec); this just shows genetic support for data-nominated targets."""
+    g = pd.read_csv(gwas_csv)
+    if not {"chr", "nlogp", "gene"}.issubset(g.columns):
+        return
+    g = g.dropna(subset=["chr", "nlogp"]).copy()
+    g["chr"] = g["chr"].astype(str)
+    order = [str(i) for i in range(1, 23)] + ["X", "Y"]
+    present = [c for c in order if c in set(g["chr"])]
+    g["chr"] = pd.Categorical(g["chr"], present, ordered=True)
+    g = g.sort_values("chr")
+    targets = set(racs_df.head(n_targets)["gene"]) if racs_df is not None and len(racs_df) else set()
+
+    fig, ax = plt.subplots(figsize=(6.6, 3.4))
+    x, xticks, xlabels = 0, [], []
+    for i, (ch, sub) in enumerate(g.groupby("chr", observed=True)):
+        xs = np.arange(len(sub)) + x
+        ax.scatter(xs, sub["nlogp"], s=12, color="#9e9e9e" if i % 2 else "#cfcfcf", linewidth=0)
+        hit = sub["gene"].isin(targets).to_numpy()
+        if hit.any():
+            ax.scatter(xs[hit], sub["nlogp"].to_numpy()[hit], s=34, color=CRIMSON, zorder=3, linewidth=0)
+            for gx, gy, gn in zip(xs[hit], sub["nlogp"].to_numpy()[hit], sub["gene"].to_numpy()[hit]):
+                ax.annotate(gn, (gx, gy), fontsize=6, fontstyle="italic",
+                            xytext=(2, 2), textcoords="offset points", color=CRIMSON)
+        xticks.append(x + len(sub) / 2)
+        xlabels.append(str(ch))
+        x += len(sub) + 2
+    ax.set_xticks(xticks)
+    ax.set_xticklabels(xlabels, fontsize=7)
+    ax.set_xlabel("chromosome")
+    ax.set_ylabel("-log10 GWAS p")
+    ax.set_title("Disease GWAS — crimson = also a top RADAR target (annotation only)", fontsize=8)
+    fig.tight_layout()
+    fig.savefig(Path(outdir) / "fig_manhattan.png", bbox_inches="tight")
+    plt.close(fig)
+
+
 def fig_paga(paga, outdir):
     """PAGA graph: cluster nodes at their UMAP centroid, sized by cell count, colored
     by dominant population; edge width = connectivity (differentiation relatedness)."""
@@ -347,6 +386,7 @@ def main():
     ap.add_argument("--de", default=None)
     ap.add_argument("--umap", default=None)
     ap.add_argument("--paga", default=None)
+    ap.add_argument("--gwas", default=None)
     ap.add_argument("--outdir", default="figures")
     args = ap.parse_args()
 
@@ -372,6 +412,8 @@ def main():
         n += 3
     if args.paga and Path(args.paga).exists():
         fig_paga(json.load(open(args.paga)), args.outdir); n += 1
+    if args.gwas and Path(args.gwas).exists():
+        fig_manhattan(args.gwas, df, args.outdir); n += 1
 
     title = ""
     if args.meta and Path(args.meta).exists():
