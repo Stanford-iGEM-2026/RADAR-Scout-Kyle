@@ -35,6 +35,8 @@ image = (
         # object encoding version".
         "cellxgene-census==1.18.0",
         "scanpy",
+        "leidenalg",
+        "igraph",
         "pyarrow",
     )
     # ship the scoring package so RACS runs on Modal
@@ -241,103 +243,351 @@ def _fetch_pop(census, obs_filter, label, max_cells, rng):
     return adata
 
 
-@app.function(image=image, volumes={DATA: vol}, timeout=3600, memory=49152, cpu=8.0)
+@app.function(image=image, volumes={DATA: vol}, timeout=7200, memory=65536, cpu=8.0)
 def build_and_score(
-    disease: str = "keloid",
-    pathogenic_cell_types: str = "skin fibroblast",
+    disease: str = "melanoma",
+    pathogenic_cell_types: str = "malignant cell",
     related_diseases: str = "",
-    tissue: str = "skin of body",
+    tissue: str = "",
     min_detect_frac: float = 0.10,
     max_cells_per_pop: int = 40000,
     exclude_technical: bool = True,
-    out_name: str = "keloid_fibroblast",
+    compute_umap: bool = True,
+    subcluster: bool = False,
+    subcluster_resolution: float = 1.0,
+    out_name: str = "",
 ) -> dict:
-    """Assemble P/H/B/R populations, normalize, and run RACS. Writes to the Volume.
+    """Disease-agnostic RADAR target prioritization on the CELLxGENE Census.
 
-    ``pathogenic_cell_types`` and ``related_diseases`` are comma-separated strings.
-    Related diseases are collapsed into one off-target group 'R' for scoring.
+    Pulls the whole diseased tissue and splits it into pathogenic P (cell types
+    matching ``pathogenic_cell_types``) vs bystander B (all other cell types ->
+    cell-type specificity), plus healthy counterpart H (same cell types in 'normal')
+    and related-disease R. Computes the full RACS metric table, a UMAP, and
+    donor-level DE; writes everything to the Volume and updates a dashboard manifest.
     """
     import cellxgene_census
     import numpy as np
+    import pandas as pd
     import scanpy as sc
     import anndata as ad
 
     from radar_scout.scoring import score_matrix
-    from radar_scout.genesets import filter_technical, reasons
+    from radar_scout.genesets import filter_technical
+    from radar_scout.de import pseudobulk_de
 
-    pct = [c.strip() for c in pathogenic_cell_types.split(",") if c.strip()]
+    pct = [c.strip().lower() for c in pathogenic_cell_types.split(",") if c.strip()]
     related = [r.strip() for r in related_diseases.split(",") if r.strip()]
-    ct_in = "[" + ", ".join(f"'{c}'" for c in pct) + "]"
+    out_name = out_name or disease.replace(" ", "_")
     tis = f" and tissue_general == '{tissue}'" if tissue else ""
     rng = np.random.default_rng(0)
 
     with cellxgene_census.open_soma(census_version=CENSUS_VERSION) as census:
-        parts = []
-        p = _fetch_pop(census, f"disease == '{disease}' and cell_type in {ct_in}{tis}",
-                       "P", max_cells_per_pop, rng)
-        if p is None:
-            raise RuntimeError(f"No pathogenic cells: disease='{disease}', cell_type in {pct}")
-        parts.append(p)
-        parts.append(_fetch_pop(census, f"disease == 'normal' and cell_type in {ct_in}{tis}",
+        # 1) whole diseased tissue (all cell types) -> P (pathogenic) vs B (bystander)
+        dis = _fetch_pop(census, f"disease == '{disease}'{tis}", "DIS", max_cells_per_pop * 2, rng)
+        if dis is None:
+            raise RuntimeError(f"No diseased cells for disease='{disease}'")
+        ctl = dis.obs["cell_type"].astype(str)
+        low = ctl.str.lower()
+        is_p = low.isin(pct).to_numpy()
+        if is_p.sum() == 0:  # substring fallback
+            is_p = np.array([any(t in c or c in t for t in pct) for c in low])
+        if is_p.sum() == 0:
+            raise RuntimeError(f"No cells matched {pct}; available: {sorted(ctl.unique())[:20]}")
+        dis.obs["radar_pop"] = np.where(is_p, "P", "B")
+        p_labels = sorted(ctl[is_p].unique())
+        lab_in = "[" + ", ".join(f"'{c}'" for c in p_labels) + "]"
+        parts = [dis]
+        # 2) healthy counterpart (same cell types, disease == normal) — may be empty (cancer)
+        parts.append(_fetch_pop(census, f"disease == 'normal' and cell_type in {lab_in}{tis}",
                                 "H", max_cells_per_pop, rng))
-        parts.append(_fetch_pop(census, f"disease == '{disease}' and cell_type not in {ct_in}{tis}",
-                                "B", max_cells_per_pop, rng))
-        for rd in related:  # each related disease -> its own tag, collapsed to R below
-            parts.append(_fetch_pop(census, f"disease == '{rd}' and cell_type in {ct_in}",
+        # 3) related diseases (same cell types)
+        for rd in related:
+            parts.append(_fetch_pop(census, f"disease == '{rd}' and cell_type in {lab_in}",
                                     f"R::{rd}", max_cells_per_pop, rng))
 
     parts = [x for x in parts if x is not None]
     adata = ad.concat(parts, join="inner", merge="same")
+    adata.obs_names_make_unique()
 
-    # normalize to CP10k (linear) — the units the Hill model expects
-    sc.pp.normalize_total(adata, target_sum=1e4)
+    raw = adata.X.copy()                            # raw counts for DE
+    sc.pp.normalize_total(adata, target_sum=1e4)    # linear CP10k for scoring
 
     pop_detail = adata.obs["radar_pop"].astype(str).to_numpy()
-    pop = np.array(["R" if s.startswith("R::") else s for s in pop_detail])  # collapse related
+    pop = np.array(["R" if s.startswith("R::") else s for s in pop_detail])
     donor = adata.obs["donor_id"].astype(str).to_numpy()
+    genes_all = (adata.var["feature_name"] if "feature_name" in adata.var
+                 else adata.var_names).to_numpy().astype(str)
 
-    # candidate genes: detected in >= min_detect_frac of pathogenic cells (sparse-safe)
+    # spec Task 4: identify the disease-enriched (pathogenic) subpopulation within the
+    # target cell type and restrict P to it. This surfaces cell-STATE markers that are
+    # diluted across the whole cell type (e.g. keloid mesenchymal fibroblasts:
+    # POSTN/ASPN/ADAM12), mirroring how melanoma's malignant cells are already a state.
+    subpop_info = {}
+    if subcluster:
+        mask_pt = np.isin(pop, ["P", "H"])
+        subad = adata[mask_pt].copy()
+        sc.pp.log1p(subad)
+        sc.pp.highly_variable_genes(subad, n_top_genes=2000)
+        sc.pp.pca(subad, n_comps=30)
+        sc.pp.neighbors(subad, n_neighbors=15)
+        try:
+            sc.tl.leiden(subad, resolution=subcluster_resolution, flavor="igraph",
+                         n_iterations=2, directed=False)
+        except (TypeError, ImportError):
+            sc.tl.leiden(subad, resolution=subcluster_resolution)
+        clusters = subad.obs["leiden"].to_numpy()
+        is_dis = (pop[mask_pt] == "P").astype(float)
+        grp = pd.Series(is_dis).groupby(clusters)
+        dfrac, csize = grp.mean(), grp.size()
+        elig = dfrac[csize >= 30]
+        if len(elig):
+            path_cluster = elig.idxmax()
+            idx_pt = np.where(mask_pt)[0]
+            reassign = idx_pt[(pop[idx_pt] == "P") & (clusters != path_cluster)]
+            pop = pop.copy()
+            pop[reassign] = "B"  # disease cells in non-pathogenic states -> bystander
+            pop_detail = pop.copy()
+            subpop_info = {"path_cluster": str(path_cluster),
+                           "disease_frac": float(dfrac[path_cluster]),
+                           "n_clusters": int(csize.size), "n_P_after": int((pop == "P").sum())}
+            print(f"[subpop] cluster {path_cluster}: disease_frac={dfrac[path_cluster]:.2f}, "
+                  f"P={subpop_info['n_P_after']} state cells (of {int(mask_pt.sum())} {pct})")
+        else:
+            print("[subpop] no eligible cluster; keeping whole-cell-type P")
+
+    # candidate genes: detected in >= min_detect_frac of pathogenic cells
     Xp = adata[pop == "P"].X
     detect = np.asarray((Xp > 0).mean(axis=0)).ravel()
     keep = np.where(detect >= min_detect_frac)[0]
-
-    sub = adata[:, keep]
-    X = sub.X
-    X = np.asarray(X.todense()) if hasattr(X, "todense") else np.asarray(X)  # only candidate genes
-    genes = (sub.var["feature_name"] if "feature_name" in sub.var else sub.var_names).to_numpy().astype(str)
-
+    genes = genes_all[keep]
     n_before = len(genes)
     if exclude_technical:
-        mask = filter_technical(genes)
-        removed = reasons(genes[~mask])
-        print(f"[filter] dropped {int((~mask).sum())}/{n_before} technical genes "
-              f"(sex/ribosomal/mito/ncRNA/IEG); e.g. {list(removed)[:8]}")
-        X = X[:, mask]
-        genes = genes[mask]
+        m = filter_technical(genes)
+        print(f"[filter] dropped {int((~m).sum())}/{n_before} technical genes")
+        keep = keep[m]
+        genes = genes[m]
 
-    df = score_matrix(X, genes, donor, pop, pos_label="P")
+    Xc = adata[:, keep].X
+    Xc = np.asarray(Xc.todense()) if hasattr(Xc, "todense") else np.asarray(Xc)
+    df = score_matrix(Xc, genes, donor, pop, pos_label="P")
+
+    # donor-level DE: P vs primary reference (healthy if present, else bystander)
+    ref = "H" if (pop == "H").any() else "B"
+    de = None
+    try:
+        raw_c = np.asarray(raw[:, keep].todense()) if hasattr(raw, "todense") else np.asarray(raw[:, keep])
+        de = pseudobulk_de(raw_c, donor, pop, genes, pos_label="P", neg_labels=[ref])
+        de.to_parquet(f"{DATA}/{out_name}_de.parquet")
+    except Exception as e:
+        print(f"[de] skipped: {type(e).__name__}: {e}")
+
+    # UMAP for the dashboard (subsampled to <=8k cells)
+    umap_saved = False
+    if compute_umap:
+        try:
+            lg = adata.copy()
+            sc.pp.log1p(lg)
+            sc.pp.highly_variable_genes(lg, n_top_genes=2000)
+            sc.pp.pca(lg, n_comps=30)
+            sc.pp.neighbors(lg, n_neighbors=15)
+            sc.tl.umap(lg)
+            xy = lg.obsm["X_umap"]
+            idx = np.sort(rng.choice(lg.n_obs, size=min(lg.n_obs, 8000), replace=False))
+            gpos = {g: i for i, g in enumerate(genes)}
+            ud = pd.DataFrame({"UMAP1": xy[idx, 0], "UMAP2": xy[idx, 1],
+                               "cell_type": lg.obs["cell_type"].astype(str).to_numpy()[idx],
+                               "pop": pop[idx], "donor": donor[idx]})
+            for g in df.head(12)["gene"].tolist():
+                if g in gpos:
+                    ud[g] = Xc[idx, gpos[g]]
+            ud.to_parquet(f"{DATA}/{out_name}_umap.parquet")
+            umap_saved = True
+        except Exception as e:
+            print(f"[umap] skipped: {type(e).__name__}: {e}")
 
     ucounts = sorted(set(pop_detail))
     counts = {u: int((pop_detail == u).sum()) for u in ucounts}
     ndon = {u: int(len(set(donor[pop_detail == u]))) for u in ucounts}
 
-    out_path = f"{DATA}/{out_name}_racs.parquet"
-    df.to_parquet(out_path)
+    df.to_parquet(f"{DATA}/{out_name}_racs.parquet")
     meta = {"disease": disease, "tissue": tissue, "pathogenic_cell_types": pct,
-            "related_diseases": related, "cell_counts": counts, "n_donors": ndon,
-            "n_candidate_genes": int(len(genes)), "n_candidate_prefilter": int(n_before),
-            "exclude_technical": bool(exclude_technical), "census_version": CENSUS_VERSION,
-            "out": out_path, "top25": df.head(25).to_dict(orient="records")}
+            "pathogenic_labels": p_labels, "related_diseases": related,
+            "cell_counts": counts, "n_donors": ndon, "n_candidate_genes": int(len(genes)),
+            "n_candidate_prefilter": int(n_before), "reference_pop": ref,
+            "has_umap": umap_saved, "has_de": de is not None, "subpop": subpop_info,
+            "census_version": CENSUS_VERSION, "top25": df.head(25).to_dict(orient="records")}
+    with open(f"{DATA}/{out_name}_meta.json", "w") as fh:
+        json.dump(meta, fh, indent=2, default=float)
+
+    # update the dashboard manifest of scored diseases
+    man_path = f"{DATA}/manifest.json"
+    try:
+        manifest = json.load(open(man_path))
+    except Exception:
+        manifest = {"diseases": []}
+    manifest["diseases"] = [d for d in manifest["diseases"] if d.get("out_name") != out_name]
+    manifest["diseases"].append({"disease": disease, "out_name": out_name,
+                                 "cell_type": pathogenic_cell_types, "n_genes": int(len(genes)),
+                                 "n_donors_P": ndon.get("P", 0), "reference_pop": ref,
+                                 "has_umap": umap_saved})
+    json.dump(manifest, open(man_path, "w"), indent=2)
+    vol.commit()
+
+    print(json.dumps({"disease": disease, "cell_counts": counts, "n_donors": ndon,
+                      "n_candidate_genes": int(len(genes)), "reference": ref,
+                      "umap": umap_saved, "de": de is not None}, indent=2))
+    print("TOP 15 RADAR targets:")
+    for r in df.head(15).to_dict("records"):
+        print(f"  {str(r['gene'])[:16]:16s} RACS={r['RACS']:.3f}  Sep={r['Sep']:.3f}  "
+              f"Feas={r['Feas']:.3f}  Off={r['OffMax']:.3f}  log2FC={r.get('log2FC', float('nan')):.2f}")
+    return meta
+
+
+@app.function(image=image, volumes={DATA: vol}, timeout=5400, memory=49152, cpu=8.0)
+def ingest_and_score_geo(gse: str = "GSE163973", disease_label: str = "keloid",
+                         out_name: str = "keloid_geo", min_detect_frac: float = 0.03) -> dict:
+    """Ingest an INDEPENDENT GEO scRNA cohort (10x RAW.tar), gate fibroblasts by
+    markers, and run RACS. This is the second keloid cohort (disease vs normal-scar)
+    for cross-cohort validation. GSE163973 = Deng 2021 (3 keloid + 3 normal scar).
+    """
+    import gzip
+    import os
+    import re
+    import shutil
+    import tarfile
+    import urllib.request
+
+    import anndata as ad
+    import numpy as np
+    import scanpy as sc
+    from scipy.io import mmread
+
+    from radar_scout.scoring import score_matrix
+    from radar_scout.genesets import filter_technical
+
+    wd = "/tmp/geo"
+    os.makedirs(wd, exist_ok=True)
+    stub = gse[:-3] + "nnn"
+    url = f"https://ftp.ncbi.nlm.nih.gov/geo/series/{stub}/{gse}/suppl/{gse}_RAW.tar"
+    tarp = f"{wd}/{gse}_RAW.tar"
+    if not os.path.exists(tarp):
+        print(f"downloading {url}")
+        urllib.request.urlretrieve(url, tarp)
+    with tarfile.open(tarp) as t:
+        t.extractall(wd)
+
+    # discover all files recursively, group by GSM id
+    allfiles = []
+    for root, _, fs in os.walk(wd):
+        for f in fs:
+            if f.startswith("GSM"):
+                allfiles.append(os.path.join(root, f))
+    groups: dict = {}
+    for f in allfiles:
+        m = re.match(r"(GSM\d+)", os.path.basename(f))
+        if m:
+            groups.setdefault(m.group(1), []).append(f)
+
+    def _read_mtx(path):
+        if path.endswith(".gz"):
+            tmp = path[:-3]
+            with gzip.open(path) as fin, open(tmp, "wb") as fout:
+                shutil.copyfileobj(fin, fout)
+            path = tmp
+        return mmread(path).tocsr()
+
+    def _lines(path):
+        op = gzip.open(path, "rt") if path.endswith(".gz") else open(path)
+        return [ln.rstrip("\n") for ln in op]
+
+    adatas = []
+    for gsm, fs in sorted(groups.items()):
+        search = list(fs)
+        # some series nest each sample as GSM..._matrix.tar.gz (a 10x bundle inside the tar)
+        nested = next((f for f in fs if f.endswith(".tar.gz") and ".mtx" not in f.lower()), None)
+        if nested and not any(".mtx" in f.lower() for f in fs):
+            gdir = os.path.join(wd, gsm + "_x")
+            os.makedirs(gdir, exist_ok=True)
+            with tarfile.open(nested) as t:
+                t.extractall(gdir)
+            search = [os.path.join(r, f) for r, _, ffs in os.walk(gdir) for f in ffs]
+        mtxf = next((f for f in search if "matrix" in os.path.basename(f).lower() and ".mtx" in f.lower()), None)
+        bcf = next((f for f in search if "barcode" in os.path.basename(f).lower()), None)
+        ftf = next((f for f in search if "feature" in os.path.basename(f).lower() or "genes" in os.path.basename(f).lower()), None)
+        if not (mtxf and bcf and ftf):
+            print(f"[skip {gsm}] missing 10x files among: {[os.path.basename(x) for x in search][:6]}")
+            continue
+        X = _read_mtx(mtxf)  # genes x cells
+        barcodes = [ln.split("\t")[0] for ln in _lines(bcf)]
+        symbols = [(ln.split("\t")[1] if "\t" in ln else ln) for ln in _lines(ftf)]
+        if X.shape[0] == len(symbols) and X.shape[1] == len(barcodes):
+            X = X.T.tocsr()  # -> cells x genes
+        a = ad.AnnData(X)
+        a.var_names = symbols[: a.n_vars]
+        a.var_names_make_unique()
+        a.obs_names = [f"{gsm}_{b}" for b in barcodes[: a.n_obs]]
+        a.obs["donor"] = gsm
+        blob = " ".join(os.path.basename(x) for x in fs).upper()
+        a.obs["condition"] = "keloid" if ("KL" in blob or "KELOID" in blob) else "normal_scar"
+        print(f"[{gsm}] {a.n_obs} cells x {a.n_vars} genes -> {a.obs['condition'][0]}")
+        adatas.append(a)
+    if not adatas:
+        raise RuntimeError("no 10x samples parsed from RAW.tar")
+
+    adata = ad.concat(adatas, join="inner")
+    adata.obs_names_make_unique()
+
+    # QC
+    sc.pp.filter_cells(adata, min_genes=200)
+    adata.var["mt"] = adata.var_names.str.upper().str.startswith("MT-")
+    sc.pp.calculate_qc_metrics(adata, qc_vars=["mt"], inplace=True, percent_top=None)
+    adata = adata[adata.obs["pct_counts_mt"] < 20].copy()
+
+    sc.pp.normalize_total(adata, target_sum=1e4)  # CP10k
+    lg = adata.copy()
+    sc.pp.log1p(lg)
+
+    def mscore(genes):
+        gg = [g for g in genes if g in lg.var_names]
+        return np.asarray(lg[:, gg].X.mean(axis=1)).ravel() if gg else np.zeros(lg.n_obs)
+
+    fib = mscore(["COL1A1", "COL1A2", "LUM", "DCN", "PDGFRA", "COL3A1"])
+    imm = mscore(["PTPRC", "CD3D", "CD68", "LYZ"])
+    endo = mscore(["PECAM1", "VWF", "CLDN5"])
+    kera = mscore(["KRT14", "KRT5", "KRT1"])
+    is_fib = (fib > 0.5) & (fib > imm) & (fib > endo) & (fib > kera)
+    print(f"fibroblasts gated: {int(is_fib.sum())}/{adata.n_obs}")
+    adata = adata[is_fib].copy()
+
+    pop = np.where(adata.obs["condition"].values == disease_label, "P", "H")
+    donor = adata.obs["donor"].astype(str).to_numpy()
+    genes_all = adata.var_names.to_numpy().astype(str)
+    Xp = adata[pop == "P"].X
+    detect = np.asarray((Xp > 0).mean(axis=0)).ravel()
+    keep = np.where(detect >= min_detect_frac)[0]
+    genes = genes_all[keep]
+    m = filter_technical(genes)
+    keep, genes = keep[m], genes[m]
+    Xc = adata[:, keep].X
+    Xc = np.asarray(Xc.todense()) if hasattr(Xc, "todense") else np.asarray(Xc)
+
+    df = score_matrix(Xc, genes, donor, pop, pos_label="P")
+    df.to_parquet(f"{DATA}/{out_name}_racs.parquet")
+    counts = {p: int((pop == p).sum()) for p in ["P", "H"]}
+    ndon = {p: int(len(set(donor[pop == p]))) for p in ["P", "H"]}
+    meta = {"disease": disease_label, "source": gse, "cohort": "GEO",
+            "cell_counts": counts, "n_donors": ndon, "n_candidate_genes": int(len(genes)),
+            "reference_pop": "H (normal scar)", "top25": df.head(25).to_dict(orient="records")}
     with open(f"{DATA}/{out_name}_meta.json", "w") as fh:
         json.dump(meta, fh, indent=2, default=float)
     vol.commit()
 
-    print(json.dumps({"cell_counts": counts, "n_donors": ndon,
-                      "n_candidate_genes": int(len(keep))}, indent=2))
-    print("TOP 15 RADAR targets:")
-    for r in df.head(15).to_dict("records"):
+    print(json.dumps({"gse": gse, "cell_counts": counts, "n_donors": ndon,
+                      "n_candidate_genes": int(len(genes))}, indent=2))
+    print("TOP 20 (GEO cohort):")
+    for r in df.head(20).to_dict("records"):
         print(f"  {str(r['gene'])[:16]:16s} RACS={r['RACS']:.3f}  Sep={r['Sep']:.3f}  "
-              f"Feas={r['Feas']:.3f}  Repro={r.get('Repro', float('nan')):.3f}  Off={r['OffMax']:.3f}")
+              f"log2FC={r.get('log2FC', float('nan')):.2f}  detect_P={r.get('detect_P', float('nan')):.0f}%")
     return meta
 
 

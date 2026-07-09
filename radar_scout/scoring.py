@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import numpy as np
-from scipy.stats import rankdata
+from scipy.stats import rankdata, mannwhitneyu
 
 from .hill import HillParams, DEFAULT_HILL, hill_activation, reachable_band
 
@@ -243,6 +243,31 @@ def score_gene(gene, expr, donor, pop, pos_label="P", neg_labels=None,
     )
 
 
+def _group_stats(x, groups):
+    """Per-group (per-donor) mean expression and detection fraction for one gene."""
+    means = np.array([x[idx].mean() for idx in groups])
+    detect = np.array([(x[idx] > 0).mean() for idx in groups])
+    return means, detect
+
+
+def _bh_fdr(p):
+    """Benjamini-Hochberg FDR, NaN-safe."""
+    p = np.asarray(p, float)
+    out = np.full(p.shape, np.nan)
+    ok = ~np.isnan(p)
+    if not ok.any():
+        return out
+    pv = p[ok]
+    order = np.argsort(pv)
+    n = pv.size
+    q = pv[order] * n / np.arange(1, n + 1)
+    q = np.minimum.accumulate(q[::-1])[::-1]
+    filled = np.empty(n)
+    filled[order] = np.clip(q, 0, 1)
+    out[ok] = filled
+    return out
+
+
 def score_matrix(expr2d, gene_names, donor, pop, pos_label="P", neg_labels=None,
                  params: HillParams = DEFAULT_HILL, weights=(1.0, 1.0, 1.0, 1.0),
                  min_cells=10):
@@ -276,36 +301,68 @@ def score_matrix(expr2d, gene_names, donor, pop, pos_label="P", neg_labels=None,
     neg_cells = np.concatenate(neg_groups_all) if neg_groups_all else np.array([], int)
     n_pos_donors = len(pos_groups)
 
+    eps = 1.0  # CP10k pseudocount for log2 fold-changes
     rows = []
     for j, g in enumerate(gene_names):
         x = expr2d[:, j]
         k_op, jstat = _youden_threshold(x[pos_cells], x[neg_cells], band)
 
-        pos_means = np.array([x[idx].mean() for idx in pos_groups])
-        neg_means = np.array([x[idx].mean() for idx in neg_groups_all])
-        sep = _auc(pos_means, neg_means) if pos_means.size and neg_means.size else np.nan
-
+        # --- pathogenic (P) donor-level abundance + detection + activation ---
         if pos_groups:
+            pmeans, pdet = _group_stats(x, pos_groups)
             pos_act = np.array([hill_activation(x[idx], params, K=k_op).mean() for idx in pos_groups])
             feas = float(pos_act.mean())
             repro = (float(np.clip(1.0 - pos_act.std(ddof=1) / (pos_act.mean() + 1e-9), 0.0, 1.0))
                      if pos_act.size >= 2 else np.nan)
+            mean_P, median_P = float(pmeans.mean()), float(np.median(pmeans))
+            cv_P = float(pmeans.std(ddof=1) / (pmeans.mean() + 1e-9)) if pmeans.size >= 2 else np.nan
+            dynrange = float(np.log2((pmeans.max() + eps) / (pmeans.min() + eps)))
+            detect_P, pct_don_P = float(100 * pdet.mean()), float(100 * (pdet >= 0.1).mean())
         else:
-            feas = repro = np.nan
+            pmeans = np.array([])
+            feas = repro = mean_P = median_P = cv_P = dynrange = detect_P = pct_don_P = np.nan
 
-        per_pop = {pos_label: feas} if pos_groups else {}
-        offvals = []
+        # --- off-target populations (H healthy, B bystander cell types, R related disease) ---
+        per_pop_stats, neg_all_means, offvals = {}, [], []
         for p, idxs in neg_groups_by_pop.items():
-            act = float(np.mean([hill_activation(x[idx], params, K=k_op).mean() for idx in idxs]))
-            per_pop[p] = act
-            offvals.append(act)
+            m, d = _group_stats(x, idxs)
+            a = np.array([hill_activation(x[idx], params, K=k_op).mean() for idx in idxs])
+            per_pop_stats[p] = (m, d, a)
+            neg_all_means.append(m)
+            offvals.append(float(a.mean()))
+        neg_all = np.concatenate(neg_all_means) if neg_all_means else np.array([])
+
+        sep = _auc(pmeans, neg_all) if pmeans.size and neg_all.size else np.nan
         offmax = float(max(offvals)) if offvals else np.nan
+
+        # donor-level significance (P vs healthy, else vs pooled off-target)
+        ref = per_pop_stats["H"][0] if "H" in per_pop_stats else neg_all
+        pval = np.nan
+        if pmeans.size >= 2 and ref.size >= 2 and not np.allclose(np.r_[pmeans, ref], pmeans[0]):
+            try:
+                pval = float(mannwhitneyu(pmeans, ref, alternative="greater").pvalue)
+            except Exception:
+                pval = np.nan
+        log2fc = float(np.log2((mean_P + eps) / (ref.mean() + eps))) if pmeans.size and ref.size else np.nan
 
         row = {"gene": str(g), "RACS": racs(sep, feas, repro, offmax, weights),
                "Sep": sep, "Feas": feas, "Repro": repro, "OffMax": offmax,
-               "k_op": k_op, "Youden_J": jstat, "n_donors": n_pos_donors}
-        row.update({f"act_{p}": v for p, v in per_pop.items()})
+               "k_op": k_op, "Youden_J": jstat, "n_donors": n_pos_donors,
+               "act_P": feas, "mean_P": mean_P, "median_P": median_P, "detect_P": detect_P,
+               "cv_P": cv_P, "dynrange": dynrange, "pct_don_P": pct_don_P,
+               "log2FC": log2fc, "p_value": pval}
+        for p, (m, d, a) in per_pop_stats.items():
+            row[f"act_{p}"] = float(a.mean())
+            row[f"mean_{p}"] = float(m.mean())
+            row[f"detect_{p}"] = float(100 * d.mean())
+            row[f"pct_don_{p}"] = float(100 * (d >= 0.1).mean())
+            row[f"log2FC_{p}"] = float(np.log2((mean_P + eps) / (m.mean() + eps))) if pmeans.size else np.nan
+        if "B" in per_pop_stats and pmeans.size:  # cell-type specificity (P vs other cell types)
+            row["celltype_spec"] = _auc(pmeans, per_pop_stats["B"][0])
+        if "R" in per_pop_stats and pmeans.size:  # disease specificity (P vs related diseases)
+            row["disease_spec"] = _auc(pmeans, per_pop_stats["R"][0])
         rows.append(row)
 
     df = pd.DataFrame(rows)
+    df["FDR"] = _bh_fdr(df["p_value"].to_numpy()) if "p_value" in df else np.nan
     return df.sort_values("RACS", ascending=False, na_position="last").reset_index(drop=True)

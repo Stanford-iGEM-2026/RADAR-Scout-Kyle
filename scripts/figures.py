@@ -119,10 +119,118 @@ def fig_window(df, outdir, n=12):
     plt.close(fig)
 
 
+def fig_volcano(de, outdir, fdr_thr=0.05, lfc_thr=1.0, label_top=15):
+    """Volcano of donor-level differential expression (log2FC vs -log10 FDR)."""
+    d = de.copy()
+    q = d["FDR"].clip(lower=1e-300)
+    d["nlq"] = -np.log10(q)
+    sig = (d["FDR"] < fdr_thr) & (d["log2FC"].abs() > lfc_thr)
+    fig, ax = plt.subplots(figsize=(5.0, 4.6))
+    ax.scatter(d.loc[~sig, "log2FC"], d.loc[~sig, "nlq"], s=8, color="#cccccc", alpha=0.6, linewidth=0)
+    up = sig & (d["log2FC"] > 0)
+    ax.scatter(d.loc[up, "log2FC"], d.loc[up, "nlq"], s=12, color=CRIMSON, linewidth=0, label="up in pathogenic")
+    ax.scatter(d.loc[sig & ~up, "log2FC"], d.loc[sig & ~up, "nlq"], s=12, color=TEAL, linewidth=0)
+    ax.axhline(-np.log10(fdr_thr), color="#999", lw=0.8, ls="--")
+    ax.axvline(lfc_thr, color="#999", lw=0.8, ls="--")
+    ax.axvline(-lfc_thr, color="#999", lw=0.8, ls="--")
+    for _, r in d[up].nlargest(label_top, "nlq").iterrows():
+        ax.annotate(r["gene"], (r["log2FC"], r["nlq"]), fontsize=7, fontstyle="italic",
+                    xytext=(2, 2), textcoords="offset points", color="#333")
+    ax.set_xlabel("log2 fold-change (pathogenic vs reference)")
+    ax.set_ylabel("-log10 FDR")
+    fig.tight_layout()
+    fig.savefig(Path(outdir) / "fig_volcano.png", bbox_inches="tight")
+    plt.close(fig)
+
+
+def _pops_present(df):
+    return [p for p in ("P", "B", "H", "R") if f"act_{p}" in df.columns]
+
+
+def fig_dotplot(df, outdir, n=20):
+    """Dot plot: top genes x populations; dot size = detection %, color = mean expr."""
+    pops = _pops_present(df)
+    d = df.head(n)[::-1]
+    y = np.arange(len(d))
+    fig, ax = plt.subplots(figsize=(1.4 + 0.7 * len(pops), 0.32 * len(d) + 1))
+    for xi, p in enumerate(pops):
+        det = d.get(f"detect_{p}", pd.Series(np.full(len(d), 50.0)))
+        mean = d.get(f"mean_{p}", d[f"act_{p}"] * 100)
+        c = mean / (mean.max() + 1e-9)
+        ax.scatter(np.full(len(d), xi), y, s=6 + 2.2 * det.to_numpy(),
+                   c=c, cmap="Reds", edgecolor="#888", linewidth=0.3, vmin=0, vmax=1)
+    ax.set_xticks(range(len(pops)))
+    ax.set_xticklabels(pops)
+    ax.set_yticks(y)
+    ax.set_yticklabels(d["gene"])
+    _italic_genes(ax)
+    ax.set_xlim(-0.5, len(pops) - 0.5)
+    ax.set_title("dot size = detection %, color = mean expr", fontsize=8, color="#666")
+    fig.tight_layout()
+    fig.savefig(Path(outdir) / "fig_dotplot.png", bbox_inches="tight")
+    plt.close(fig)
+
+
+def fig_heatmap(df, outdir, n=25):
+    """Heatmap of RADAR activation across populations for the top genes."""
+    pops = _pops_present(df)
+    d = df.head(n)[::-1]
+    mat = d[[f"act_{p}" for p in pops]].to_numpy()
+    fig, ax = plt.subplots(figsize=(1.2 + 0.6 * len(pops), 0.28 * len(d) + 1))
+    im = ax.imshow(mat, aspect="auto", cmap="Reds", vmin=0, vmax=1)
+    ax.set_xticks(range(len(pops)))
+    ax.set_xticklabels(pops)
+    ax.set_yticks(range(len(d)))
+    ax.set_yticklabels(d["gene"])
+    _italic_genes(ax)
+    cb = fig.colorbar(im, ax=ax, fraction=0.04, pad=0.02)
+    cb.set_label("RADAR activation", fontsize=8)
+    cb.outline.set_visible(False)
+    fig.tight_layout()
+    fig.savefig(Path(outdir) / "fig_heatmap.png", bbox_inches="tight")
+    plt.close(fig)
+
+
+def fig_umap(umap, outdir, gene=None):
+    """UMAP panels: population, cell type, and a candidate gene's expression."""
+    gene_cols = [c for c in umap.columns if c not in ("UMAP1", "UMAP2", "cell_type", "pop", "donor")]
+    gene = gene or (gene_cols[0] if gene_cols else None)
+    fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+    # (a) population
+    palette = {"P": CRIMSON, "B": "#bdbdbd", "H": TEAL, "R": "#e6a23c"}
+    for p, sub in umap.groupby("pop"):
+        axes[0].scatter(sub["UMAP1"], sub["UMAP2"], s=4, color=palette.get(p, "#999"),
+                        label=p, linewidth=0, alpha=0.7)
+    axes[0].legend(frameon=False, fontsize=8, markerscale=2)
+    axes[0].set_title("population", fontsize=10)
+    # (b) cell type
+    cts = umap["cell_type"].value_counts().index[:10]
+    cmap = plt.get_cmap("tab10")
+    for i, ct in enumerate(cts):
+        sub = umap[umap["cell_type"] == ct]
+        axes[1].scatter(sub["UMAP1"], sub["UMAP2"], s=4, color=cmap(i % 10), label=str(ct)[:18],
+                        linewidth=0, alpha=0.7)
+    axes[1].legend(frameon=False, fontsize=6, markerscale=2, loc="best")
+    axes[1].set_title("cell type", fontsize=10)
+    # (c) gene expression
+    if gene:
+        sc = axes[2].scatter(umap["UMAP1"], umap["UMAP2"], s=4, c=umap[gene], cmap="Reds", linewidth=0)
+        fig.colorbar(sc, ax=axes[2], fraction=0.046, pad=0.02).outline.set_visible(False)
+        axes[2].set_title(f"{gene} (CP10k)", fontsize=10, fontstyle="italic")
+    for ax in axes:
+        ax.set_xticks([]); ax.set_yticks([])
+        ax.set_xlabel("UMAP1", fontsize=8); ax.set_ylabel("UMAP2", fontsize=8)
+    fig.tight_layout()
+    fig.savefig(Path(outdir) / "fig_umap.png", bbox_inches="tight")
+    plt.close(fig)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("parquet")
     ap.add_argument("--meta", default=None)
+    ap.add_argument("--de", default=None)
+    ap.add_argument("--umap", default=None)
     ap.add_argument("--outdir", default="figures")
     args = ap.parse_args()
 
@@ -130,16 +238,24 @@ def main():
     df = pd.read_parquet(args.parquet).sort_values("RACS", ascending=False).reset_index(drop=True)
     df = df[df["RACS"].notna()]
 
+    n = 4
     fig_racs_ranking(df, args.outdir)
     fig_knee(df, args.outdir)
     fig_components(df, args.outdir)
     fig_window(df, args.outdir)
+    fig_dotplot(df, args.outdir)
+    fig_heatmap(df, args.outdir)
+    n += 2
+    if args.de and Path(args.de).exists():
+        fig_volcano(pd.read_parquet(args.de), args.outdir); n += 1
+    if args.umap and Path(args.umap).exists():
+        fig_umap(pd.read_parquet(args.umap), args.outdir); n += 1
 
     title = ""
     if args.meta and Path(args.meta).exists():
         m = json.load(open(args.meta))
         title = f"{m.get('disease','')} / {','.join(m.get('pathogenic_cell_types', []))}"
-    print(f"wrote 4 figures to {args.outdir}/  [{title}]  (n={len(df)} genes)")
+    print(f"wrote {n} figures to {args.outdir}/  [{title}]  (n={len(df)} genes)")
 
 
 if __name__ == "__main__":
