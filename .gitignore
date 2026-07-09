@@ -23,7 +23,9 @@ dashboard/dist/
 dashboard/build/
 .next/
 
-# os / editor
+# os / editor / local tooling
 .DS_Store
 .vscode/
 .idea/
+.claude/
+**/.claude/
