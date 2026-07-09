@@ -90,18 +90,18 @@ RADAR targets are bona-fide melanoma markers/therapeutic antigens: **PRAME, GPNM
 S100B, SERPINE2, PLP1, GPM6B** (log2FC 3–4.6). This is the disease-agnostic engine
 working end-to-end with a strong cell-type-specificity axis.
 
-**Keloid** — the hard case (single small cohort). Two things unlock it:
-1. **Pathogenic subpopulation identification** (spec Task 4): Leiden-cluster the
-   fibroblasts, find the keloid-enriched *mesenchymal* state, score *it* — POSTN's
-   detection goes 30% → 61%.
-2. **Cross-cohort validation** (spec §6) across two independent cohorts
-   (CELLxGENE + GEO **GSE163973**). The robust consensus is the canonical keloid
-   mesenchymal program — **COL1A1, POSTN (#2), COL3A1, ASPN (#4), COL5A2, FN1,
-   COL6A1/2/3, CTHRC1** — reproducible in both datasets.
+**Keloid** — the hard case (small cohorts). Three things unlock it:
+1. **Pathogenic subpopulation identification** (spec Task 4): score the keloid-enriched
+   *mesenchymal* fibroblast state, not all fibroblasts — POSTN detection 30% → 61%.
+2. **Detection-difference specificity** (`spec_score`) — the sensor metric that surfaces
+   near-binary markers (**ADAM12**: 92% of keloid MFB vs 3% of normal scar).
+3. **Pooled cross-cohort ranking** across **3 cohorts** (CELLxGENE + GEO **GSE163973**
+   + Deng-annotated MFB): **POSTN #1, ASPN #2, ADAM12 #6**, each ≈100th percentile in
+   *every* cohort. This **reproduces the team's independent wet-lab sensor nomination
+   (ADAM12 + POSTN)** end-to-end through the platform.
 
-Ranked two ways: **RACS** (RADAR compatibility — specific, thresholdable targets)
-and **DSS** (Disease Specificity — the reference-style high-transcription ×
-fold-change view that surfaces disease markers like POSTN).
+The dashboard has **one tab per disease** with a **Pooled** consensus ranking (default),
+plus RACS / DSS / **Sensor** toggles and a per-gene "reproducibility across cohorts" view.
 
 > Activation *magnitudes* remain provisional pending Hill calibration from the
 > RADAR dose-response; the specificity/DSS *rankings* are calibration-independent.
@@ -125,8 +125,12 @@ cd dashboard && npm install && npm run dev   # multi-disease dashboard
 Brand palette: `#8e1918` (crimson), `#1c7170` (teal), white, black.
 
 ---
-*Status: v0.2 — disease-agnostic pipeline (whole-tissue → pathogenic subpopulation),
-full metric set + RACS/DSS rankings, donor-aware DE, ontology harmonization, technical
-filter, Modal Census pipeline + GEO ingestion, cross-cohort validation, publication
-figures (UMAP/volcano/heatmap/dot/knee), and a multi-disease React dashboard. Validated
-on melanoma + keloid (2 cohorts). See [`ROADMAP.md`](ROADMAP.md).*
+*Status: v0.3 — disease-agnostic pipeline (dedicated pathogenic fetch → subpopulation
+ID), full metric set + RACS/DSS/spec_score/pooled rankings, donor-aware DE, ontology
+harmonization, technical filter, doublet removal (scrublet) + batch correction (Harmony),
+Modal Census + GEO ingestion, cross-cohort **pooled** ranking, the complete spec
+visualization set (UMAP/volcano/scatter/bar/heatmap/violin/dot/forest/Manhattan/PAGA),
+and a **one-tab-per-disease** React dashboard. Validated on melanoma, keloid (3 cohorts),
+and pulmonary fibrosis — reproduces the wet-lab ADAM12+POSTN nomination. Plasmid step
+intentionally out of scope. Remaining: Hill calibration (activation magnitudes only).
+See [`ROADMAP.md`](ROADMAP.md).*
