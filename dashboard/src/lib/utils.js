@@ -21,8 +21,66 @@ export const COMPONENTS = [
   { key: 'OffMax', label: 'OffMax' },
 ]
 
+// The two ways a target can be ranked.
+export const RANK_METRICS = {
+  RACS: {
+    key: 'RACS',
+    label: 'RACS',
+    long: 'RADAR compatibility',
+    blurb: 'good RADAR targets',
+    d: 3,
+    color: '#8e1918',
+  },
+  DSS: {
+    key: 'DSS',
+    label: 'DSS',
+    long: 'Disease specificity',
+    blurb: 'markers of this disease',
+    d: 2,
+    color: '#1c7170',
+  },
+}
+
+// Categorical palette for cell types etc. — brand-forward, muted, no neon.
+export const PALETTE = [
+  '#8e1918', '#1c7170', '#b45150', '#5aa3a2', '#c98a2b',
+  '#6b6b6b', '#4a6d8c', '#8a6ea3', '#a3a3a3', '#3f7d54',
+  '#c25b7a', '#7a8a3f', '#2f5d5c', '#b8823a', '#555555',
+]
+
 export const fmt = (v, d = 3) =>
   v === null || v === undefined || Number.isNaN(v) ? '—' : Number(v).toFixed(d)
+
+// True if the field exists (and isn't null) on the first record.
+export const hasCol = (rows, key) =>
+  Array.isArray(rows) && rows.length > 0 && rows[0][key] !== undefined && rows[0][key] !== null
+
+// Reds-style sequential colormap on t in [0,1] → 'rgb(...)'. White → crimson.
+export function reds(t) {
+  const x = Math.max(0, Math.min(1, Number.isFinite(t) ? t : 0))
+  // interpolate #fff5f0 (near-white) → #8e1918 (crimson), gamma-ish for punch
+  const g = Math.pow(x, 0.85)
+  const r = Math.round(255 + (142 - 255) * g)
+  const gg = Math.round(245 + (25 - 245) * g)
+  const b = Math.round(240 + (24 - 240) * g)
+  return `rgb(${r},${gg},${b})`
+}
+
+// Min/max of a numeric field, robust to missing values.
+export function extent(rows, key) {
+  let lo = Infinity
+  let hi = -Infinity
+  for (const r of rows) {
+    const v = r[key]
+    if (typeof v === 'number' && Number.isFinite(v)) {
+      if (v < lo) lo = v
+      if (v > hi) hi = v
+    }
+  }
+  if (lo === Infinity) return [0, 1]
+  if (lo === hi) return [lo - 0.5, hi + 0.5]
+  return [lo, hi]
+}
 
 // Trigger a browser download of a Blob.
 function downloadBlob(blob, filename) {
@@ -40,8 +98,9 @@ function downloadBlob(blob, filename) {
 export function exportCsv(rows, filename = 'racs_table.csv') {
   if (!rows.length) return
   const cols = [
-    'gene', 'RACS', 'Sep', 'Feas', 'Repro', 'OffMax',
-    'k_op', 'Youden_J', 'n_donors', 'act_P', 'act_H', 'act_R',
+    'gene', 'RACS', 'DSS', 'Sep', 'Feas', 'Repro', 'OffMax',
+    'detect_P', 'log2FC', 'FDR', 'celltype_spec', 'disease_spec',
+    'k_op', 'Youden_J', 'n_donors', 'act_P', 'act_H', 'act_B', 'act_R',
   ]
   const present = cols.filter((c) => c in rows[0])
   const header = present.join(',')

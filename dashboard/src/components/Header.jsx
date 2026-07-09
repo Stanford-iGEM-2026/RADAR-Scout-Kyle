@@ -1,19 +1,21 @@
-// Slim top header: title, disease + cell-type selectors, gene search, stats strip.
+// Slim top header: title, disease/cohort selector (from diseases.json),
+// gene search, and a stats strip driven by the selected disease's manifest entry.
 export default function Header({
-  meta,
-  disease,
-  setDisease,
-  cellType,
-  setCellType,
+  diseases,
+  activeKey,
+  setActiveKey,
+  info,
   query,
   setQuery,
   nCandidates,
   nTotal,
+  loading,
 }) {
-  const diseaseOptions = ['keloid']
-  const cellOptions =
-    meta?.pathogenic_cell_types?.length ? meta.pathogenic_cell_types : ['skin fibroblast']
-  const donors = meta?.n_donors || {}
+  const donors = info?.n_donors || {}
+  const subpop = info?.subpop && Object.keys(info.subpop).length ? info.subpop : null
+
+  // Human label for each manifest entry in the switcher.
+  const optLabel = (d) => `${d.disease} · ${d.cell_type} · ${d.cohort}`
 
   return (
     <header className="header">
@@ -26,21 +28,16 @@ export default function Header({
         </div>
         <div className="controls">
           <div className="control">
-            <label htmlFor="sel-disease">Disease</label>
-            <select id="sel-disease" value={disease} onChange={(e) => setDisease(e.target.value)}>
-              {diseaseOptions.map((d) => (
-                <option key={d} value={d}>
-                  {d}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="control">
-            <label htmlFor="sel-cell">Cell type</label>
-            <select id="sel-cell" value={cellType} onChange={(e) => setCellType(e.target.value)}>
-              {cellOptions.map((c) => (
-                <option key={c} value={c}>
-                  {c}
+            <label htmlFor="sel-disease">Disease · cohort</label>
+            <select
+              id="sel-disease"
+              value={activeKey}
+              onChange={(e) => setActiveKey(e.target.value)}
+              style={{ minWidth: 280 }}
+            >
+              {diseases.map((d) => (
+                <option key={d.key} value={d.key}>
+                  {optLabel(d)}
                 </option>
               ))}
             </select>
@@ -63,10 +60,10 @@ export default function Header({
       <div className="stats-strip">
         <div className="stat">
           <span className="value">
-            {nCandidates}
-            {nCandidates !== nTotal ? <span className="sub"> / {nTotal}</span> : null}
+            {loading ? '…' : nCandidates}
+            {!loading && nCandidates !== nTotal ? <span className="sub"> / {nTotal}</span> : null}
           </span>
-          <span className="label">Candidate genes</span>
+          <span className="label">Genes scored</span>
         </div>
         <div className="stat">
           <span className="value">{donors.P ?? '—'}</span>
@@ -77,21 +74,32 @@ export default function Header({
           <span className="label">Donors · healthy</span>
         </div>
         <div className="stat">
-          <span className="value">{donors.R ?? '—'}</span>
-          <span className="label">Donors · related</span>
+          <span className="value">{donors.B ?? '—'}</span>
+          <span className="label">Donors · background</span>
         </div>
         <div className="stat">
           <span className="value" style={{ textTransform: 'capitalize' }}>
-            {meta?.tissue ?? '—'}
+            {info?.cell_type ?? '—'}
           </span>
-          <span className="label">Tissue</span>
+          <span className="label">Cell type</span>
         </div>
         <div className="stat">
           <span className="value" style={{ fontSize: 13, fontWeight: 500 }}>
-            {meta?.census_version ?? '—'}
+            {info?.cohort ?? '—'}
           </span>
-          <span className="label">Census version</span>
+          <span className="label">Cohort</span>
         </div>
+        {subpop ? (
+          <div className="stat">
+            <span className="value" style={{ fontSize: 13, fontWeight: 600, color: 'var(--crimson)' }}>
+              cluster {subpop.path_cluster}
+            </span>
+            <span className="label">
+              pathogenic subpopulation
+              {subpop.n_P_after != null ? ` · ${subpop.n_P_after} cells` : ''}
+            </span>
+          </div>
+        ) : null}
       </div>
     </header>
   )

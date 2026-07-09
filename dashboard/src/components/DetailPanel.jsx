@@ -14,7 +14,14 @@ import {
   LabelList,
 } from 'recharts'
 import ChartCard from './ChartCard'
-import { COLORS, fmt } from '../lib/utils'
+import { COLORS, fmt, hasCol } from '../lib/utils'
+
+// Off-target populations that may appear alongside the pathogenic act_P.
+const OFF_POPS = [
+  { key: 'act_H', label: 'Healthy' },
+  { key: 'act_B', label: 'Background' },
+  { key: 'act_R', label: 'Related' },
+]
 
 // ---- custom tooltips (editorial, no recharts default chrome) -------------- //
 function BreakdownTooltip({ active, payload }) {
@@ -93,12 +100,19 @@ export default function DetailPanel({ gene, allGenes, rank }) {
     { name: 'RACS', value: gene.RACS, kind: 'racs' },
   ]
 
-  // (b) per-population activation (therapeutic window).
+  // (b) per-population activation (therapeutic window). Only the off-target
+  // populations actually present in this disease are shown.
+  const offPops = OFF_POPS.filter((o) => gene[o.key] !== undefined && gene[o.key] !== null)
   const activation = [
-    { pop: 'Pathogenic', key: 'P', P: gene.act_P, off: null },
-    { pop: 'Healthy', key: 'H', P: null, off: gene.act_H },
-    { pop: 'Related', key: 'R', P: null, off: gene.act_R },
+    { pop: 'Pathogenic', P: gene.act_P, off: null },
+    ...offPops.map((o) => ({ pop: o.label, P: null, off: gene[o.key] })),
   ]
+  const offValues = offPops.map((o) => gene[o.key]).filter((v) => typeof v === 'number')
+  const worstOff = offValues.length ? Math.max(...offValues) : null
+  const worstOffPop =
+    offValues.length
+      ? offPops[offPops.findIndex((o) => gene[o.key] === worstOff)]?.label
+      : '—'
 
   // (c) abundance-vs-specificity scatter for ALL genes.
   const scatterData = allGenes.map((g) => ({
@@ -113,14 +127,27 @@ export default function DetailPanel({ gene, allGenes, rank }) {
   const selPoint = scatterData.filter((d) => d.selected)
 
   // (d) off-target view: on-target vs worst-case off-target.
-  const offMaxPop = gene.act_H >= gene.act_R ? 'H' : 'R'
   const offTarget = [
     {
       name: gene.gene,
       onTarget: gene.act_P,
-      offTarget: Math.max(gene.act_H, gene.act_R),
+      offTarget: worstOff,
     },
   ]
+
+  // (e) extended metric table — expose the fuller metric set, skipping any
+  // columns this disease doesn't carry.
+  const metricRows = [
+    { k: 'DSS', label: 'DSS (disease specificity)', v: gene.DSS, d: 2 },
+    { k: 'log2FC', label: 'log2 fold-change', v: gene.log2FC, d: 2 },
+    { k: 'detect_P', label: 'Detection in pathogenic (%)', v: gene.detect_P, d: 1 },
+    { k: 'mean_P', label: 'Mean expr (pathogenic)', v: gene.mean_P, d: 2 },
+    { k: 'dynrange', label: 'Dynamic range', v: gene.dynrange, d: 2 },
+    { k: 'cv_P', label: 'CV (pathogenic)', v: gene.cv_P, d: 2 },
+    { k: 'FDR', label: 'FDR', v: gene.FDR, d: 4 },
+    { k: 'celltype_spec', label: 'Cell-type specificity', v: gene.celltype_spec, d: 2 },
+    { k: 'disease_spec', label: 'Disease specificity', v: gene.disease_spec, d: 2 },
+  ].filter((r) => r.v !== undefined && r.v !== null)
 
   return (
     <div>
@@ -134,6 +161,12 @@ export default function DetailPanel({ gene, allGenes, rank }) {
           <span className="rank-badge">rank #{rank}</span>
         </div>
         <div className="kv-strip">
+          {gene.DSS !== undefined && gene.DSS !== null ? (
+            <div className="kv">
+              <span className="k">DSS</span>
+              <span className="v" style={{ color: COLORS.teal }}>{fmt(gene.DSS, 2)}</span>
+            </div>
+          ) : null}
           <div className="kv">
             <span className="k">k_op</span>
             <span className="v">{fmt(gene.k_op, 1)}</span>
@@ -308,7 +341,7 @@ export default function DetailPanel({ gene, allGenes, rank }) {
         {/* (d) off-target view */}
         <ChartCard
           title="Off-target check"
-          sub={`on-target vs max(act_H, act_R) — worst is ${offMaxPop}`}
+          sub={`on-target vs worst off-target — worst is ${worstOffPop}`}
           filename={`${gene.gene}_off_target`}
           legend={
             <>
@@ -348,6 +381,29 @@ export default function DetailPanel({ gene, allGenes, rank }) {
           </ResponsiveContainer>
         </ChartCard>
       </div>
+
+      {metricRows.length ? (
+        <div className="chart-card full" style={{ marginTop: 24 }}>
+          <div className="chart-head">
+            <h3>
+              Full metric set
+              <span className="sub">  abundance · specificity · significance</span>
+            </h3>
+          </div>
+          <div className="compare-table-wrap" style={{ padding: '4px 14px 14px' }}>
+            <table className="compare-table metric-table">
+              <tbody>
+                {metricRows.map((r) => (
+                  <tr key={r.k}>
+                    <td>{r.label}</td>
+                    <td className={r.k === 'DSS' ? 'racs' : undefined}>{fmt(r.v, r.d)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

@@ -643,3 +643,164 @@ table.compare-table tbody tr:hover { background: var(--bg-faint); }
   color: var(--muted);
 }
 .error { color: var(--crimson); }
+
+/* ------------------------------------------------------------------ rank toggle */
+.rank-toggle-bar {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin-bottom: 22px;
+  padding-bottom: 4px;
+}
+
+.rank-toggle { display: flex; align-items: center; gap: 12px; }
+
+.rank-toggle .rt-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.rt-hint { font-size: 12.5px; color: var(--muted); line-height: 1.45; }
+
+/* segmented control (rank toggle, umap color-by) */
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.seg-btn {
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 5px 16px;
+  transition: all 0.12s ease;
+}
+
+.seg-btn + .seg-btn { border-left: 1px solid var(--border-strong); }
+.seg-btn:hover:not(:disabled) { color: var(--teal); }
+.seg-btn.active { background: var(--crimson); color: #fff; }
+.seg-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ------------------------------------------------------------------ filters extras */
+.filters-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 10px 0 4px;
+}
+
+/* ------------------------------------------------------------------ panels stack (full-width viz) */
+.panels-stack { margin-top: 28px; }
+.panels-stack > * + * { margin-top: 24px; }
+
+.viz-panel .panel-body { padding: 16px; }
+
+/* a bare full-width chart card living directly in a panel body */
+.viz-panel .chart-card.full { border: none; }
+.viz-panel .chart-card.full > .chart-head { padding-left: 0; padding-right: 0; border-top: none; }
+.viz-panel .chart-card.full > .chart-body { padding-left: 0; padding-right: 0; }
+.viz-panel .chart-card.full > .chart-note,
+.viz-panel .chart-card.full > .legend-inline { padding-left: 0; padding-right: 0; }
+
+/* ------------------------------------------------------------------ umap */
+.umap-legend {
+  flex: 0 1 200px;
+  min-width: 160px;
+  padding-top: 6px;
+}
+
+.umap-legend .legend-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.umap-legend .lk {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--ink);
+}
+
+.umap-legend .swatch { width: 11px; height: 11px; border-radius: 2px; flex: 0 0 auto; display: inline-block; }
+.umap-legend .ct-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 150px; }
+
+.umap-gene-label {
+  display: block;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  font-weight: 600;
+  margin-bottom: 5px;
+}
+
+.expr-ramp { margin-top: 4px; }
+.expr-ramp .ramp-bar {
+  display: block;
+  height: 10px;
+  width: 100%;
+  max-width: 160px;
+  border-radius: 3px;
+  background: linear-gradient(to right, #fff5f0, #8e1918);
+  border: 1px solid var(--border);
+}
+.expr-ramp .ramp-ticks {
+  display: flex;
+  justify-content: space-between;
+  max-width: 160px;
+  font-size: 10.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  margin-top: 3px;
+}
+.expr-ramp .ramp-cap {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 4px;
+  font-style: italic;
+}
+
+/* ------------------------------------------------------------------ cross-cohort */
+.xc-grid {
+  display: grid;
+  grid-template-columns: 1.6fr 1fr;
+  gap: 20px;
+  align-items: start;
+}
+
+@media (max-width: 1000px) {
+  .xc-grid { grid-template-columns: 1fr; }
+}
+
+.xc-table-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.xc-table-card .compare-table th,
+.xc-table-card .compare-table td { padding: 7px 12px; }
+
+/* metric table in detail panel: two columns, left-label right-value */
+.metric-table td:first-child {
+  font-style: normal;
+  font-weight: 500;
+  color: var(--ink);
+}
+.metric-table td:last-child {
+  text-align: right;
+  font-weight: 600;
+}

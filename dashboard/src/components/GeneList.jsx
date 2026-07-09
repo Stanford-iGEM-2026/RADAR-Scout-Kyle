@@ -1,10 +1,12 @@
-import { COMPONENTS, fmt } from '../lib/utils'
+import { COMPONENTS, RANK_METRICS, fmt } from '../lib/utils'
 
-// Left ranked list. Rows show rank, italic gene name, a slim crimson RACS bar,
-// and the numeric score. Sortable by RACS or any component. Clicking selects.
+// Left ranked list. Rows show rank, italic gene name, a slim bar for the active
+// rank metric, and its numeric value. The bar/value follow whichever metric is
+// active (RACS crimson, DSS teal). Sortable by any column; clicking selects.
 export default function GeneList({
   genes,
-  maxRacs,
+  maxMetric,
+  rankMetric,
   selected,
   onSelect,
   sortKey,
@@ -13,17 +15,22 @@ export default function GeneList({
   compareIds,
   onToggleCompare,
   compareEnabled,
+  hasDSS,
 }) {
+  const rm = RANK_METRICS[rankMetric]
+  // Sort chips: the RACS components, plus DSS when the disease exposes it.
+  const sortChips = hasDSS ? [...COMPONENTS, { key: 'DSS', label: 'DSS' }] : COMPONENTS
+
   return (
     <div className="panel">
       <div className="panel-head">
         <h2>Ranked targets</h2>
-        <span className="hint">{genes.length} shown</span>
+        <span className="hint">by {rm.label} · {genes.length} shown</span>
       </div>
 
       <div className="list-toolbar">
         <span className="sort-label">Sort</span>
-        {COMPONENTS.map((c) => (
+        {sortChips.map((c) => (
           <button
             key={c.key}
             className={`chip${sortKey === c.key ? ' active' : ''}`}
@@ -42,7 +49,8 @@ export default function GeneList({
           {genes.map((g) => {
             const isSel = selected === g.gene
             const inCompare = compareIds.includes(g.gene)
-            const width = maxRacs > 0 ? Math.max(2, (g.RACS / maxRacs) * 100) : 0
+            const val = g[rm.key]
+            const width = maxMetric > 0 && Number.isFinite(val) ? Math.max(2, (val / maxMetric) * 100) : 0
             return (
               <li
                 key={g.gene}
@@ -73,9 +81,12 @@ export default function GeneList({
                 </span>
                 <span className="racs-cell">
                   <span className="racs-bar-track">
-                    <span className="racs-bar-fill" style={{ width: `${width}%` }} />
+                    <span
+                      className="racs-bar-fill"
+                      style={{ width: `${width}%`, background: rm.color }}
+                    />
                   </span>
-                  <span className="racs-value">{fmt(g.RACS, 3)}</span>
+                  <span className="racs-value">{fmt(val, rm.d)}</span>
                 </span>
               </li>
             )

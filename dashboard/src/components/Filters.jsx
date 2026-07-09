@@ -1,7 +1,10 @@
 import { useState } from 'react'
 
-// Collapsible threshold filters. Four MIN sliders (RACS, Feas, Sep, Repro) and
-// one MAX slider (OffMax). Reports how many filters are non-default.
+// Collapsible threshold filters.
+//  - Four MIN sliders on the 0–1 RACS components (RACS, Feas, Sep, Repro)
+//  - one MAX slider (OffMax)
+//  - detection-frequency MIN (detect_P, %) and log2FC MIN, scaled to the data.
+// Reports how many filters are non-default.
 const MIN_FIELDS = [
   { key: 'RACS', label: 'RACS' },
   { key: 'Feas', label: 'Feas' },
@@ -9,12 +12,14 @@ const MIN_FIELDS = [
   { key: 'Repro', label: 'Repro' },
 ]
 
-export default function Filters({ filters, setFilters, activeCount }) {
+export default function Filters({ filters, setFilters, activeCount, defaults, bounds }) {
   const [open, setOpen] = useState(false)
 
   const update = (key, value) => setFilters((f) => ({ ...f, [key]: value }))
-  const reset = () =>
-    setFilters({ RACS: 0, Feas: 0, Sep: 0, Repro: 0, OffMax: 1 })
+  const reset = () => setFilters({ ...defaults })
+
+  const dp = bounds?.detect_P || [0, 100]
+  const fc = bounds?.log2FC || [0, 6]
 
   return (
     <div className="panel">
@@ -54,9 +59,39 @@ export default function Filters({ filters, setFilters, activeCount }) {
             />
             <span className="thresh">{filters.OffMax.toFixed(2)}</span>
           </div>
+
+          <div className="filters-divider" />
+
+          <div className="slider-row">
+            <label htmlFor="flt-detect">detect_P ≥</label>
+            <input
+              id="flt-detect"
+              type="range"
+              min={Math.floor(dp[0])}
+              max={Math.ceil(dp[1])}
+              step="1"
+              value={filters.detect_P}
+              onChange={(e) => update('detect_P', Number(e.target.value))}
+            />
+            <span className="thresh">{filters.detect_P.toFixed(0)}%</span>
+          </div>
+          <div className="slider-row">
+            <label htmlFor="flt-log2fc">log2FC ≥</label>
+            <input
+              id="flt-log2fc"
+              type="range"
+              min={Math.floor(fc[0])}
+              max={Math.ceil(fc[1])}
+              step="0.1"
+              value={filters.log2FC}
+              onChange={(e) => update('log2FC', Number(e.target.value))}
+            />
+            <span className="thresh">{filters.log2FC.toFixed(1)}</span>
+          </div>
+
           <div className="filters-actions">
             <span className="muted" style={{ fontSize: 12 }}>
-              Off-target ceiling keeps housekeeping genes out.
+              Off-target ceiling + detection floor keep housekeeping / sparse genes out.
             </span>
             <button className="link-btn" onClick={reset}>
               Reset
