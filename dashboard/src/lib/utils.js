@@ -39,6 +39,14 @@ export const RANK_METRICS = {
     d: 2,
     color: '#1c7170',
   },
+  spec_score: {
+    key: 'spec_score',
+    label: 'Sensor',
+    long: 'Detection specificity',
+    blurb: 'near-binary sensor markers (POSTN/ADAM12)',
+    d: 2,
+    color: '#8e1918',
+  },
 }
 
 // Categorical palette for cell types etc. — brand-forward, muted, no neon.

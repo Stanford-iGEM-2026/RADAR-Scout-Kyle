@@ -365,6 +365,18 @@ def score_matrix(expr2d, gene_names, donor, pop, pos_label="P", neg_labels=None,
             row["celltype_spec"] = _auc(pmeans, per_pop_stats["B"][0])
         if "R" in per_pop_stats and pmeans.size:  # disease specificity (P vs related diseases)
             row["disease_spec"] = _auc(pmeans, per_pop_stats["R"][0])
+        # detection-difference specificity (logFC x delta detection). Surfaces near-binary
+        # markers that abundance-weighted DSS misses (e.g. ADAM12: 92% in P vs 3% in ref).
+        ref_det = None
+        if "H" in per_pop_stats:
+            ref_det = 100.0 * per_pop_stats["H"][1].mean()
+        elif per_pop_stats:
+            ref_det = float(np.mean([100.0 * d.mean() for (_, d, _) in per_pop_stats.values()]))
+        if pmeans.size and ref_det is not None and np.isfinite(detect_P) and np.isfinite(log2fc):
+            row["delta_detect"] = float(detect_P - ref_det)
+            # up-regulated only (a sensor needs the target HIGH in pathogenic); the
+            # positive-part product avoids scoring down-genes (neg x neg = pos).
+            row["spec_score"] = float(max(log2fc, 0.0) * max(detect_P - ref_det, 0.0) / 100.0)
         rows.append(row)
 
     df = pd.DataFrame(rows)

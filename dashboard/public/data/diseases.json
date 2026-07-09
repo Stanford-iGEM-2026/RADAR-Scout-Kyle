@@ -77,6 +77,17 @@
       "reference_pop": null,
       "has_umap": false,
       "subpop": {}
+    },
+    {
+      "key": "keloid_deng_mfb",
+      "disease": "keloid",
+      "cell_type": "pathological MFB (Deng C3)",
+      "cohort": "Deng MFB vs normal scar",
+      "n_genes": 8407,
+      "n_donors": {},
+      "reference_pop": null,
+      "has_umap": false,
+      "subpop": {}
     }
   ]
 }

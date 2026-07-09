@@ -110,8 +110,8 @@ export default function App() {
 
   // if a disease has no DSS, force the RACS view
   useEffect(() => {
-    if (!hasDSS && rankMetric === 'DSS') setRankMetric('RACS')
-  }, [hasDSS, rankMetric])
+    if (rankMetric !== 'RACS' && !hasCol(genes, rankMetric)) setRankMetric('RACS')
+  }, [genes, hasDSS, rankMetric])
 
   // keep the display sort valid when switching diseases (e.g. DSS column gone)
   useEffect(() => {
@@ -276,8 +276,8 @@ export default function App() {
                 key={m.key}
                 className={`seg-btn${rankMetric === m.key ? ' active' : ''}`}
                 onClick={() => setRankMetric(m.key)}
-                disabled={m.key === 'DSS' && !hasDSS}
-                title={m.key === 'DSS' && !hasDSS ? 'DSS not available for this cohort' : undefined}
+                disabled={!hasCol(genes, m.key)}
+                title={!hasCol(genes, m.key) ? `${m.label} not available for this cohort` : undefined}
               >
                 {m.label}
               </button>

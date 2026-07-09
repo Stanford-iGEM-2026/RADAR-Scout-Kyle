@@ -64,8 +64,11 @@ def main():
             if ent:
                 diseases.append(ent)
                 seen.add(d["out_name"])
-    # GEO cohort (not in the census manifest)
-    for name, dis, ct, coh in [("keloid_geo", "keloid", "skin fibroblast", "GEO GSE163973")]:
+    # extra cohorts not in the census manifest (GEO + the Deng MFB sensor ranking)
+    for name, dis, ct, coh in [
+        ("keloid_geo", "keloid", "skin fibroblast", "GEO GSE163973"),
+        ("keloid_deng_mfb", "keloid", "pathological MFB (Deng C3)", "Deng MFB vs normal scar"),
+    ]:
         if name not in seen and (OUT / f"{name}_racs.parquet").exists():
             ent = emit_disease(name, dis, ct, cohort=coh)
             if ent:
