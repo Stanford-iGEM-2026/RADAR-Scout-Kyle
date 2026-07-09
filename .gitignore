@@ -7,8 +7,10 @@ __pycache__/
 .ipynb_checkpoints/
 
 # data / large artifacts (single-cell matrices never go in git)
-data/
+/data/
 outputs/
+# but the dashboard's generated demo data IS committed
+!dashboard/public/data/
 *.h5ad
 *.h5
 *.parquet

@@ -1,0 +1,61 @@
+{
+  "diseases": [
+    {
+      "key": "melanoma_malignant",
+      "disease": "melanoma",
+      "cell_type": "malignant cell",
+      "cohort": "CELLxGENE",
+      "n_genes": 9892,
+      "n_donors": {
+        "B": 57,
+        "H": 83,
+        "P": 64
+      },
+      "reference_pop": "H",
+      "has_umap": true,
+      "subpop": {}
+    },
+    {
+      "key": "keloid_v2",
+      "disease": "keloid",
+      "cell_type": "skin fibroblast",
+      "cohort": "CELLxGENE",
+      "n_genes": 7617,
+      "n_donors": {},
+      "reference_pop": null,
+      "has_umap": false,
+      "subpop": {}
+    },
+    {
+      "key": "keloid_subpop",
+      "disease": "keloid",
+      "cell_type": "skin fibroblast",
+      "cohort": "CELLxGENE",
+      "n_genes": 5755,
+      "n_donors": {
+        "B": 4,
+        "H": 214,
+        "P": 4
+      },
+      "reference_pop": "H",
+      "has_umap": true,
+      "subpop": {
+        "path_cluster": "5",
+        "disease_frac": 0.22472594397076737,
+        "n_clusters": 21,
+        "n_P_after": 369
+      }
+    },
+    {
+      "key": "keloid_geo",
+      "disease": "keloid",
+      "cell_type": "skin fibroblast",
+      "cohort": "GEO GSE163973",
+      "n_genes": 10819,
+      "n_donors": {},
+      "reference_pop": null,
+      "has_umap": false,
+      "subpop": {}
+    }
+  ]
+}
