@@ -80,25 +80,44 @@ Portal, GEO, EBI Single Cell Expression Atlas, Tabula Sapiens (healthy reference
 Annotation only (never quantification): Open Targets, Human Protein Atlas,
 Reactome, Cell Ontology (CL) + MONDO/DOID for name harmonization.
 
-## First results — keloid (provisional)
+## Results — disease-agnostic, validated across diseases
 
-First end-to-end vertical on **real** CELLxGENE Census data: keloid skin
-fibroblasts (P, 4 donors) vs normal skin fibroblasts (H, 214 donors) and related
-fibrotic/wound conditions (R: localized scleroderma, injury), 3,487 candidate genes.
+The platform runs on any (disease, cell type) pair. Demonstrated on **real**
+CELLxGENE Census + GEO data:
 
-- After filtering technical genes, credible keloid biology surfaces —
-  **HAS2, COL5A2, COL6A3, ZEB2, ITGB1** — alongside residual broadly-expressed
-  genes, reflecting a real limitation: **keloid is a single cohort, so disease is
-  confounded with batch.** See the "KEY FINDING" in [`ROADMAP.md`](ROADMAP.md).
-- Scores are **provisional** pending Hill-parameter calibration from the RADAR
-  dose-response; the *specificity ranking* is calibration-independent, the
-  *activation magnitudes* are not.
-- The dashboard loads these results out of the box; `scripts/figures.py` regenerates
-  the figures in `figures/`.
+**Melanoma** (P = malignant cell, 64 donors; B = tumor microenvironment) — top
+RADAR targets are bona-fide melanoma markers/therapeutic antigens: **PRAME, GPNMB,
+S100B, SERPINE2, PLP1, GPM6B** (log2FC 3–4.6). This is the disease-agnostic engine
+working end-to-end with a strong cell-type-specificity axis.
 
-Run the dashboard:
+**Keloid** — the hard case (single small cohort). Two things unlock it:
+1. **Pathogenic subpopulation identification** (spec Task 4): Leiden-cluster the
+   fibroblasts, find the keloid-enriched *mesenchymal* state, score *it* — POSTN's
+   detection goes 30% → 61%.
+2. **Cross-cohort validation** (spec §6) across two independent cohorts
+   (CELLxGENE + GEO **GSE163973**). The robust consensus is the canonical keloid
+   mesenchymal program — **COL1A1, POSTN (#2), COL3A1, ASPN (#4), COL5A2, FN1,
+   COL6A1/2/3, CTHRC1** — reproducible in both datasets.
+
+Ranked two ways: **RACS** (RADAR compatibility — specific, thresholdable targets)
+and **DSS** (Disease Specificity — the reference-style high-transcription ×
+fold-change view that surfaces disease markers like POSTN).
+
+> Activation *magnitudes* remain provisional pending Hill calibration from the
+> RADAR dose-response; the specificity/DSS *rankings* are calibration-independent.
+
+Regenerate everything:
 ```bash
-cd dashboard && npm install && npm run dev
+# score any disease on Modal:
+modal run modal_app/census_pull.py::build_and_score --disease melanoma \
+    --pathogenic-cell-types "malignant cell" --subcluster
+# ingest an independent GEO cohort:
+modal run modal_app/census_pull.py::ingest_and_score_geo --gse GSE163973
+# figures, cross-cohort, dashboard data:
+python scripts/figures.py outputs/<name>_racs.parquet --umap outputs/<name>_umap.parquet
+python scripts/cross_cohort.py CELLxGENE=... GEO=... --rank-by DSS
+python scripts/build_dashboard_data.py
+cd dashboard && npm install && npm run dev   # multi-disease dashboard
 ```
 
 ## Design system
@@ -106,6 +125,8 @@ cd dashboard && npm install && npm run dev
 Brand palette: `#8e1918` (crimson), `#1c7170` (teal), white, black.
 
 ---
-*Status: v0.1 — framework, donor-aware scorer, DE, ontology, technical filter, Modal
-Census pipeline, design hand-off, figures, and a working React dashboard all landed
-and tested on the keloid vertical. See [`ROADMAP.md`](ROADMAP.md).*
+*Status: v0.2 — disease-agnostic pipeline (whole-tissue → pathogenic subpopulation),
+full metric set + RACS/DSS rankings, donor-aware DE, ontology harmonization, technical
+filter, Modal Census pipeline + GEO ingestion, cross-cohort validation, publication
+figures (UMAP/volcano/heatmap/dot/knee), and a multi-disease React dashboard. Validated
+on melanoma + keloid (2 cohorts). See [`ROADMAP.md`](ROADMAP.md).*
