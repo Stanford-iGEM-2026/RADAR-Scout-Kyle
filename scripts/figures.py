@@ -250,6 +250,68 @@ def fig_umap(umap, outdir, gene=None):
     plt.close(fig)
 
 
+def fig_violin(umap, outdir, n_genes=4):
+    """Violin plots of candidate-gene expression across populations (P/B/H/R)."""
+    gene_cols = [c for c in umap.columns if c not in ("UMAP1", "UMAP2", "cell_type", "pop", "donor")][:n_genes]
+    pops = [p for p in ["P", "B", "H", "R"] if p in set(umap["pop"])]
+    if not gene_cols or not pops:
+        return
+    palette = {"P": CRIMSON, "B": "#bdbdbd", "H": TEAL, "R": "#e6a23c"}
+    fig, axes = plt.subplots(1, len(gene_cols), figsize=(2.4 * len(gene_cols), 3.4))
+    axes = np.atleast_1d(axes)
+    for ax, g in zip(axes, gene_cols):
+        data = [umap.loc[umap["pop"] == p, g].to_numpy() for p in pops]
+        parts = ax.violinplot(data, showmeans=False, showextrema=False, widths=0.85)
+        for i, pc in enumerate(parts["bodies"]):
+            pc.set_facecolor(palette.get(pops[i], "#999"))
+            pc.set_alpha(0.8)
+            pc.set_edgecolor("white")
+        ax.set_xticks(range(1, len(pops) + 1))
+        ax.set_xticklabels(pops)
+        ax.set_title(g, fontsize=10, fontstyle="italic")
+        ax.set_ylabel("expression (CP10k)" if ax is axes[0] else "")
+    fig.tight_layout()
+    fig.savefig(Path(outdir) / "fig_violin.png", bbox_inches="tight")
+    plt.close(fig)
+
+
+def fig_forest(umap, outdir, gene=None):
+    """Per-donor mean expression (pathogenic vs off-target donors) with 95% CI —
+    a donor-level effect-size forest for one candidate gene."""
+    gene_cols = [c for c in umap.columns if c not in ("UMAP1", "UMAP2", "cell_type", "pop", "donor")]
+    gene = gene or (gene_cols[0] if gene_cols else None)
+    if gene is None:
+        return
+    d = umap[["donor", "pop", gene]].copy()
+    d["grp"] = np.where(d["pop"] == "P", "pathogenic", "off-target")
+    per = d.groupby(["grp", "donor"])[gene].mean().reset_index()
+    fig, ax = plt.subplots(figsize=(4.8, 0.28 * len(per) + 1.2))
+    y, yticks, ylabels = 0, [], []
+    for grp, color in [("pathogenic", CRIMSON), ("off-target", "#9e9e9e")]:
+        sub = per[per["grp"] == grp].sort_values(gene)
+        for _, r in sub.iterrows():
+            ax.plot(r[gene], y, "o", color=color, ms=4, alpha=0.7)
+            yticks.append(y)
+            ylabels.append(str(r["donor"])[:12])
+            y += 1
+        v = sub[gene].to_numpy()
+        if len(v) >= 2:
+            m, ci = v.mean(), 1.96 * v.std(ddof=1) / np.sqrt(len(v))
+            ax.plot([m - ci, m + ci], [y, y], color=color, lw=2.5)
+            ax.plot(m, y, "D", color=color, ms=7)
+            yticks.append(y)
+            ylabels.append(f"{grp} mean ± CI")
+            y += 1
+        y += 0.6
+    ax.set_yticks(yticks)
+    ax.set_yticklabels(ylabels, fontsize=7)
+    ax.set_xlabel(f"{gene} per-donor mean (CP10k)")
+    ax.set_title(f"{gene} — donor-level effect", fontsize=10, fontstyle="italic")
+    fig.tight_layout()
+    fig.savefig(Path(outdir) / "fig_forest.png", bbox_inches="tight")
+    plt.close(fig)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("parquet")
@@ -274,7 +336,11 @@ def main():
     if args.de and Path(args.de).exists():
         fig_volcano(pd.read_parquet(args.de), args.outdir); n += 1
     if args.umap and Path(args.umap).exists():
-        fig_umap(pd.read_parquet(args.umap), args.outdir); n += 1
+        um = pd.read_parquet(args.umap)
+        fig_umap(um, args.outdir)
+        fig_violin(um, args.outdir)
+        fig_forest(um, args.outdir, gene=str(df.iloc[0]["gene"]) if len(df) else None)
+        n += 3
 
     title = ""
     if args.meta and Path(args.meta).exists():
